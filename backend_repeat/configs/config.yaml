@@ -1,5 +1,4 @@
-
-# 完全跑在主机
+# 这个是完全跑在主机上面的
 
 server:
   port: 8080
@@ -7,9 +6,9 @@ server:
 database:
   host: localhost
   port: 3306
-  user: root
+  user: root 
   password: 123456
-  dbname: feedsystem
+  dbname: feedsystem 
 
 redis:
   host: localhost
@@ -20,11 +19,11 @@ redis:
 rabbitmq:
   host: localhost
   port: 5672
-  username: admin
+  username: admin 
   password: password123
-  
+
 observability:
   pprof:
     enabled: true
     api_addr: localhost:6060
-    worker_addr: localhost:6061
+    worker_addr: localhost:6061 

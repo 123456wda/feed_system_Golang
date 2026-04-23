@@ -17,7 +17,7 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p123456 --silent"]
+      test: [ "CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p123456 --silent" ]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -25,13 +25,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "123456"]
+    command: [ "redis-server", "--appendonly", "yes", "--requirepass", "123456" ]
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      test: [ "CMD", "redis-cli", "-a", "123456", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -48,7 +48,7 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      test: [ "CMD-SHELL", "rabbitmq-diagnostics -q ping" ]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -103,4 +103,5 @@ volumes:
   redis_data:
   rabbitmq_data:
   backend_uploads:
+
 

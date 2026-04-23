@@ -2,16 +2,17 @@ package main
 
 import (
 	"context"
+	"log"
+	"os"
+	"strconv"
+	"time"
+
 	"feedsystem_video_go/internal/config"
 	"feedsystem_video_go/internal/db"
 	apphttp "feedsystem_video_go/internal/http"
 	rabbitmq "feedsystem_video_go/internal/middleware/rabbitmq"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
 	"feedsystem_video_go/internal/observability"
-	"log"
-	"os"
-	"strconv"
-	"time"
 )
 
 func main() {
@@ -32,7 +33,7 @@ func main() {
 	}
 
 	// 连接数据库
-	//log.Printf("Database config: %v", cfg.Database)
+	// log.Printf("Database config: %v", cfg.Database)
 	sqlDB, err := db.NewDB(cfg.Database)
 	if err != nil {
 		log.Fatalf("Failed to connect database: %v", err)
