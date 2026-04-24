@@ -23,7 +23,7 @@ func NewRabbitMQ(cfg *config.RabbitMQConfig) (*RabbitMQ, error) {
 	if cfg == nil {
 		return nil, errors.New("rabbitmq config is nil")
 	}
-	url := "amqp://" + cfg.Username + ":" + cfg.Password + "@" + cfg.Host + ":" + strconv.Itoa(cfg.Port) + "/"
+	url := "amqp://" + cfg.Username + ":" + cfg.Password + "@" + cfg.Host + ":" + strconv.Itoa(cfg.Port)
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, err
@@ -48,14 +48,17 @@ func (r *RabbitMQ) Close() error {
 	return nil
 }
 
+// 通常是使用消息队列前或者在启动链路提前声明好要用到的队列和交换机
 func (r *RabbitMQ) DeclareTopic(exchange string, queue string, bindingKey string) error {
-	if r == nil || r.Ch == nil {
-		return errors.New("rabbitmq is not initialized")
-	}
-	if exchange == "" || queue == "" || bindingKey == "" {
-		return errors.New("exchange/queue/bindingKey is required")
+	if r == nil || r.Ch == nil || r.Conn == nil {
+		return errors.New("RabbitMQ is not initialized")
 	}
 
+	if exchange == "" || queue == "" || bindingKey == "" {
+		return errors.New("exchange,queue,bindingKey cannot be empty!")
+	}
+
+	// 声明交换机
 	if err := r.Ch.ExchangeDeclare(
 		exchange,
 		"topic",
@@ -68,6 +71,7 @@ func (r *RabbitMQ) DeclareTopic(exchange string, queue string, bindingKey string
 		return err
 	}
 
+	// 声明一个消息队列
 	q, err := r.Ch.QueueDeclare(
 		queue,
 		true,
@@ -80,37 +84,49 @@ func (r *RabbitMQ) DeclareTopic(exchange string, queue string, bindingKey string
 		return err
 	}
 
-	return r.Ch.QueueBind(
+	// 绑定队列
+	if err := r.Ch.QueueBind(
 		q.Name,
 		bindingKey,
 		exchange,
 		false,
 		nil,
-	)
+	); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (r *RabbitMQ) PublishJSON(ctx context.Context, exchange string, routingKey string, payload any) error {
-	if r == nil || r.Ch == nil {
-		return errors.New("rabbitmq is not initialized")
+// 封装好以json格式发送消息的函数
+func (r *RabbitMQ) PublishJSON(ctx context.Context, exchange string, routineKey string, data any) error {
+	if r == nil || r.Ch == nil || r.Conn == nil {
+		return errors.New("RabbitMQ is not initialized")
 	}
-	if exchange == "" || routingKey == "" {
-		return errors.New("exchange and routingKey are required")
+
+	if exchange == "" || routineKey == "" || data == nil {
+		return errors.New("exchange,routineKey,data cannot be empty!")
 	}
-	b, err := json.Marshal(payload)
+
+	// json化消息
+	body, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
-	return r.Ch.PublishWithContext(ctx, exchange, routingKey, false, false, amqp.Publishing{
+
+	// 发送消息
+	return r.Ch.PublishWithContext(ctx, exchange, routineKey, false, false, amqp.Publishing{
 		ContentType:  "application/json",
-		DeliveryMode: amqp.Persistent, // 消息持久化
-		Timestamp:    time.Now(),      // 消息时间戳
-		Body:         b,               // 消息内容
+		DeliveryMode: amqp.Persistent,
+		Body:         body,
+		Timestamp:    time.Now(),
 	})
 }
 
 func newEventID(n int) (string, error) {
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
+	_, err := rand.Read(b)
+	if err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil

@@ -3,8 +3,8 @@ package db
 import (
 	"fmt"
 
+	"feedsystem_video_go/internal/account"
 	"feedsystem_video_go/internal/config"
-	"feedsystem_video_go/internal/config/account"
 	"feedsystem_video_go/internal/social"
 	"feedsystem_video_go/internal/video"
 

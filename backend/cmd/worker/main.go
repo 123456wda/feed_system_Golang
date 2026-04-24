@@ -2,6 +2,13 @@ package main
 
 import (
 	"context"
+	"log"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
+
 	"feedsystem_video_go/internal/config"
 	"feedsystem_video_go/internal/db"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
@@ -9,12 +16,6 @@ import (
 	"feedsystem_video_go/internal/social"
 	"feedsystem_video_go/internal/video"
 	"feedsystem_video_go/internal/worker"
-	"log"
-	"os"
-	"os/signal"
-	"strconv"
-	"syscall"
-	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )

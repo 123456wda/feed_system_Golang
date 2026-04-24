@@ -3,6 +3,7 @@ module feedsystem_video_go
 go 1.26.1
 
 require (
+	github.com/rabbitmq/amqp091-go v1.11.0
 	github.com/redis/go-redis/v9 v9.18.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.6.0

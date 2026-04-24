@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"context"
@@ -7,21 +7,22 @@ import (
 	"os"
 	"time"
 
-	"feedsystem_video_go/db"
 	"feedsystem_video_go/internal/config"
-	"feedsystem_video_go/internal/middleware/redis"
+	"feedsystem_video_go/internal/db"
+	rabbitmq "feedsystem_video_go/internal/middleware/rabbitmq"
+	rediscache "feedsystem_video_go/internal/middleware/redis"
 	"feedsystem_video_go/internal/observability"
 )
 
 func main() {
-	// 加载配置
+	// Load config.
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
 		configPath = "configs/config.yaml"
 	}
 	log.Printf("loading config from %s", configPath)
 
-	// 尝试从文件里面读取配置
+	// Try to load config from file.
 	cfg, useDefault, err := config.LoadLocalDev(configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
@@ -35,26 +36,26 @@ func main() {
 
 	fmt.Println(cfg)
 
-	// 连接数据库
+	// Connect database.
 	sqlDB, err := db.NewDB(cfg.Database)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	// 自动化建表
+	// Auto-migrate tables.
 	err = db.AutoMigrate(sqlDB)
 	if err != nil {
 		log.Fatalf("Failed to AutoMigrate database: %v", err)
 	}
 	defer db.CloseDB(sqlDB)
 
-	// 连接Redis缓存
-	cache, err := redis.NewFromEnv(&cfg.Redis)
+	// Connect Redis cache.
+	cache, err := rediscache.NewFromEnv(&cfg.Redis)
 	if err != nil {
 		log.Printf("Failed to connect to redis: %v", err)
 		cache = nil
 	} else {
-		// 测试连接是否成功
+		// Verify Redis connection.
 		Pingctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		defer cancel()
 
@@ -68,9 +69,17 @@ func main() {
 		}
 	}
 
-	// 连接消息队列
+	// Connect RabbitMQ.
+	rmq, err := rabbitmq.NewRabbitMQ(&cfg.RabbitMQ)
+	if err != nil {
+		log.Printf("Failed to connect to RabbitMQ: %v", err)
+		rmq = nil
+	} else {
+		defer rmq.Close()
+		log.Printf("rabbitMQ connected")
+	}
 
-	// 启动pprof性能分析服务
+	// Start pprof server.
 	pprofServer, err := observability.NewPprofServer(
 		"API",
 		cfg.ObservabilityConfig.Pprof.Enabled,
@@ -81,6 +90,5 @@ func main() {
 	}
 	defer pprofServer.Close()
 
-	// 设置路由
-
+	// Set routes.
 }
