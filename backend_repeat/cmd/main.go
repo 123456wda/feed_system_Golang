@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"time"
 
+	"feedsystem_video_go/db"
 	"feedsystem_video_go/internal/config"
+	"feedsystem_video_go/internal/middleware/redis"
 )
 
 func main() {
@@ -29,4 +33,40 @@ func main() {
 	}
 
 	fmt.Println(cfg)
+
+	// 连接数据库
+	sqlDB, err := db.NewDB(cfg.Database)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+
+	// 自动化建表
+	err = db.AutoMigrate(sqlDB)
+	if err != nil {
+		log.Fatalf("Failed to AutoMigrate database: %v", err)
+	}
+	defer db.CloseDB(sqlDB)
+
+	// 连接Redis缓存
+	cache, err := redis.NewFromEnv(&cfg.Redis)
+	if err != nil {
+		log.Printf("Failed to connect to redis: %v", err)
+		cache = nil
+	} else {
+		// 测试连接是否成功
+		Pingctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+
+		if err := cache.Ping(Pingctx); err != nil {
+			log.Printf("redis not available: %v", err)
+			_ = cache.Close()
+			cache = nil
+		} else {
+			defer cache.Close()
+			log.Println("redis connected")
+		}
+	}
+
+	// 连接消息队列
+
 }

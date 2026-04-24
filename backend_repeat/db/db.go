@@ -4,6 +4,9 @@ import (
 	"fmt"
 
 	"feedsystem_video_go/internal/config"
+	"feedsystem_video_go/internal/config/account"
+	"feedsystem_video_go/internal/social"
+	"feedsystem_video_go/internal/video"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -19,4 +22,16 @@ func NewDB(dbcfg config.DatabaseConfig) (*gorm.DB, error) {
 	}
 
 	return db, nil
+}
+
+func AutoMigrate(db *gorm.DB) error {
+	return db.AutoMigrate(&account.Account{}, &video.Video{}, &video.Like{}, &video.Comment{}, &social.Social{}, &video.OutboxMsg{})
+}
+
+func CloseDB(db *gorm.DB) error {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
