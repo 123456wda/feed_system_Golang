@@ -10,6 +10,7 @@ import (
 	"feedsystem_video_go/db"
 	"feedsystem_video_go/internal/config"
 	"feedsystem_video_go/internal/middleware/redis"
+	"feedsystem_video_go/internal/observability"
 )
 
 func main() {
@@ -68,5 +69,18 @@ func main() {
 	}
 
 	// 连接消息队列
+
+	// 启动pprof性能分析服务
+	pprofServer, err := observability.NewPprofServer(
+		"API",
+		cfg.ObservabilityConfig.Pprof.Enabled,
+		cfg.ObservabilityConfig.Pprof.ApiAddr,
+	)
+	if err != nil {
+		log.Printf("Failed to start API pprof server: %v", err)
+	}
+	defer pprofServer.Close()
+
+	// 设置路由
 
 }
