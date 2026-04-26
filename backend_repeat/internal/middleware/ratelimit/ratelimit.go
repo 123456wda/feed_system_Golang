@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -37,7 +38,18 @@ func Limit(
 		}
 		key := buildKey(keyPrefix, subject)
 		fmt.Println(key)
-		//下面对redis缓存操作
+		// 下面对redis缓存操作
+		count, err := cache.IncrementWithExpire(c.Request.Context(), key, window)
+		if err != nil {
+			c.Next()
+			return
+		}
+		if count > maxRequests {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+				"error": "too many requests",
+			})
+		}
+		c.Next()
 	}
 }
 

@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"feedsystem_video_go/internal/config"
 
@@ -39,4 +40,26 @@ func (c *Client) Ping(ctx context.Context) error {
 		return nil
 	}
 	return c.rdb.Ping(ctx).Err()
+}
+
+var incrementWithExpireScript = redis.NewScript(
+	`
+	local count = redis.call('INCR',KEYS[1])
+	if count==1 then
+		redis.call('PEXPIRE',KEYS[1],ARGV[1])
+	end 
+	return count 
+	`,
+)
+
+func (c *Client) IncrementWithExpire(ctx context.Context, key string, expireTime time.Duration) (int64, error) {
+	if c == nil || c.rdb == nil {
+		return 0, nil
+	}
+	return incrementWithExpireScript.Run(
+		ctx,
+		c.rdb,
+		[]string{key},
+		expireTime.Milliseconds(),
+	).Int64()
 }

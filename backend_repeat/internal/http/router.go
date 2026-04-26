@@ -9,8 +9,10 @@ import (
 	"syscall"
 	"time"
 
+	"feedsystem_video_go/internal/account"
 	"feedsystem_video_go/internal/config"
 	"feedsystem_video_go/internal/middleware/rabbitmq"
+	"feedsystem_video_go/internal/middleware/ratelimit"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +28,28 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 	// 把URL路径/static映射为对应路径,目的是方便加载本地视频资源
 	r.Static("/static", "./.run/uploads")
 
+	// 创建account相关限流器
+	loginLimiter := ratelimit.Limit(cache, "account_login", 10, time.Minute, ratelimit.KeyByIP)
+	registerLimiter := ratelimit.Limit(cache, "account_register", 10, time.Minute, ratelimit.KeyByIP)
+
+	// 创建account相关业务路由组以及路由
+	/*
+		这里涉及一个层层封装
+		最底层封装account仓库,操作数据层
+		外包一层service,负责处理业务逻辑
+		最外层包一层handler,负责处理响应请求
+	*/
+	accountRepository := account.NewAccountRepository(db)
+	accountService := account.NewAccountService(accountRepository, cache)
+	accountHandler := account.NewAccountHandler(accountService)
+	accountGroup := r.Group("/account")
+	{
+		accountGroup.POST("/register", registerLimiter, accountHandler.CreateAccount)
+		accountGroup.POST("/login", loginLimiter, accountHandler.Login)
+		accountGroup.POST("/changePassword", accountHandler.ChangePassword)
+		accountGroup.POST("/findByID", accountHandler.FindByID)
+		accountGroup.POST("/findByUsername", accountHandler.FindByUsername)
+	}
 	return r
 }
 
