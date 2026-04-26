@@ -7,7 +7,7 @@ database:
   host: localhost
   port: 3307
   user: root
-  password: 123456
+  password: root
   dbname: feedsystem
 
 redis:
@@ -25,5 +25,5 @@ rabbitmq:
 observability:
   pprof:
     enabled: true
-    api_addr: localhost:6060
+    api_addr: localhost:6062
     worker_addr: localhost:6061

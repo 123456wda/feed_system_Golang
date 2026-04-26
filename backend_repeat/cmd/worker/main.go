@@ -17,10 +17,8 @@
 import (
 	"context"
 	"log"
-	"mime/quotedprintable"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -32,8 +30,6 @@ import (
 	"feedsystem_video_go/internal/social"
 	"feedsystem_video_go/internal/video"
 	"feedsystem_video_go/internal/worker"
-
-	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 const (
@@ -106,29 +102,29 @@ func main() {
 	// Connect RabbitMQ.
 	rbq, err := rabbitmq.NewRabbitMQ(&cfg.RabbitMQ)
 	if err != nil {
-		log.Fatalf("Failed to initialze RabbitMQ: %w", err)
+		log.Fatalf("Failed to initialze RabbitMQ: %v", err)
 	}
 	defer rbq.Close()
 
 	// Declare MQ topology.
 	if err := declareSocialTopology(rbq); err != nil {
-		log.Fatalf("Failed to declare social topology: %w", err)
+		log.Fatalf("Failed to declare social topology: %v", err)
 	}
 	if err := declareLikeTopology(rbq); err != nil {
-		log.Fatalf("Failed to declare like topology: %w", err)
+		log.Fatalf("Failed to declare like topology: %v", err)
 	}
 	if err := declareCommentTopology(rbq); err != nil {
-		log.Fatalf("Failed to declare comment topology: %w", err)
+		log.Fatalf("Failed to declare comment topology: %v", err)
 	}
 	if cache != nil {
 		if err := declarePopularityTopology(rbq); err != nil {
-			log.Fatalf("Failed to declare popularity topology: %w", err)
+			log.Fatalf("Failed to declare popularity topology: %v", err)
 		}
 	}
 
 	// Configure consumer prefetch.
 	if err := rbq.Ch.Qos(prefetchCount, prefetchSize, prefetchGlobal); err != nil {
-		log.Fatalf("Failed to set Qos: %w", err)
+		log.Fatalf("Failed to set Qos: %v", err)
 	}
 
 	// Create repositories and workers.
@@ -143,9 +139,48 @@ func main() {
 	commentRepo := video.NewCommentRepository(sqlDB)
 	commentWorker := worker.NewCommentWorker(rbq, commentRepo, videoRepo, commentQueue)
 
+	var popularityWorker *worker.PopularityWorker
 	if cache != nil {
-		popularityWorker := worker.NewPopularityWorker(rbq, cache, popularityQueue)
+		popularityWorker = worker.NewPopularityWorker(rbq, cache, popularityQueue)
 	}
+
+	// 创建一个上下文管理消费者
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop() // 自动关闭上下文
+
+	// 启动一下pprof服务连接
+	pprofServer, err := observability.NewPprofServer("Worker", cfg.ObservabilityConfig.Pprof.Enabled, cfg.ObservabilityConfig.Pprof.WorkerAddr)
+	if err != nil {
+		log.Printf("Worker pprof server start failed: %v", err)
+	}
+	defer pprofServer.Close()
+
+	// 开始启动消费者协程
+	errCh := make(chan error, 4) // 创建一个管道接收4个协程的错误信息
+	log.Printf("Worker started consuming queue = %s", socialQueue)
+	go func() {
+		errCh <- socialWorker.Run(ctx)
+	}()
+	log.Printf("Worker started consuming queue = %s", likeQueue)
+	go func() {
+		errCh <- likeWorker.Run(ctx)
+	}()
+	log.Printf("Worker started consuming queue = %s", commentQueue)
+	go func() {
+		errCh <- commentWorker.Run(ctx)
+	}()
+	if popularityWorker != nil {
+		log.Printf("Worker started consuming queue = %s", popularityQueue)
+		go func() {
+			errCh <- popularityWorker.Run(ctx)
+		}()
+	}
+
+	err = <-errCh
+	if err != nil && err != context.Canceled {
+		log.Fatalf("Worker stopped: %v", err)
+	}
+	log.Printf("Worker stopped")
 }
 
 func declareSocialTopology(rbq *rabbitmq.RabbitMQ) error {

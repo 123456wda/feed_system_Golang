@@ -2,19 +2,21 @@ package ratelimit
 
 import (
 	"fmt"
-	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
-	jwt "feedsystem_video_go/internal/middleware/jwt"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
 
 	"github.com/gin-gonic/gin"
 )
 
-type KeyFunc func(*gin.Context) (string, bool)
+type KeyFunc func(c *gin.Context) (string, bool)
 
+/*
+基本思路,对于account/login(例子)这个请求,根据ip地址和对应请求的前缀组成键,在redis里面自增后取值判断是否在指定时间超过最大限制
+->未超过限制 Next()
+->超过限制  Abort()
+*/
 func Limit(
 	cache *rediscache.Client,
 	keyPrefix string,
@@ -27,24 +29,15 @@ func Limit(
 			c.Next()
 			return
 		}
+		// 根据IP获取键值主体
 		subject, ok := keyFunc(c)
 		if !ok {
 			c.Next()
 			return
 		}
 		key := buildKey(keyPrefix, subject)
-		count, err := cache.IncrementWithExpire(c.Request.Context(), key, window)
-		if err != nil {
-			c.Next()
-			return
-		}
-		if count > maxRequests {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-				"error": "too many requests",
-			})
-			return
-		}
-		c.Next()
+		fmt.Println(key)
+		//下面对redis缓存操作
 	}
 }
 
@@ -62,12 +55,4 @@ func KeyByIP(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	return ip, true
-}
-
-func KeyByAccount(c *gin.Context) (string, bool) {
-	accountID, err := jwt.GetAccountID(c)
-	if err != nil || accountID == 0 {
-		return "", false
-	}
-	return strconv.FormatUint(uint64(accountID), 10), true
 }

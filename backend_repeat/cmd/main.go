@@ -2,13 +2,16 @@
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
 	"feedsystem_video_go/internal/config"
 	"feedsystem_video_go/internal/db"
+	apphttp "feedsystem_video_go/internal/http"
 	rabbitmq "feedsystem_video_go/internal/middleware/rabbitmq"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
 	"feedsystem_video_go/internal/observability"
@@ -17,6 +20,9 @@ import (
 func main() {
 	// Load config.
 	configPath := os.Getenv("CONFIG_PATH")
+	configPath_docker := flag.String("config", "", "配置文件路径")
+	flag.Parse()
+	configPath = *configPath_docker
 	if configPath == "" {
 		configPath = "configs/config.yaml"
 	}
@@ -34,8 +40,6 @@ func main() {
 		log.Printf("config loaded from file: %s", configPath)
 	}
 
-	fmt.Println(cfg)
-
 	// Connect database.
 	sqlDB, err := db.NewDB(cfg.Database)
 	if err != nil {
@@ -47,6 +51,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to AutoMigrate database: %v", err)
 	}
+	log.Printf("mysql connected")
 	defer db.CloseDB(sqlDB)
 
 	// Connect Redis cache.
@@ -70,12 +75,12 @@ func main() {
 	}
 
 	// Connect RabbitMQ.
-	rmq, err := rabbitmq.NewRabbitMQ(&cfg.RabbitMQ)
+	rbq, err := rabbitmq.NewRabbitMQ(&cfg.RabbitMQ)
 	if err != nil {
 		log.Printf("Failed to connect to RabbitMQ: %v", err)
-		rmq = nil
+		rbq = nil
 	} else {
-		defer rmq.Close()
+		defer rbq.Close()
 		log.Printf("rabbitMQ connected")
 	}
 
@@ -91,4 +96,17 @@ func main() {
 	defer pprofServer.Close()
 
 	// Set routes.
+	r := apphttp.SetRouter(sqlDB, cache, rbq)
+	srv := &http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler:      r,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	// 异步启动服务
+	go apphttp.StartServer(srv, &cfg.Server)
+
+	// 优雅停机
+	apphttp.GracefulShutdown(srv)
 }

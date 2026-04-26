@@ -1,5 +1,7 @@
 .run/
 backend/.run/
+.gocache
+.idea
 
 #
 # Binaries for programs and plugins
