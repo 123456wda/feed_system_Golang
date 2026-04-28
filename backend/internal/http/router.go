@@ -43,8 +43,8 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rmq *rabbitmq.RabbitMQ) *g
 		accountGroup.POST("/findByID", accountHandler.FindByID)
 		accountGroup.POST("/findByUsername", accountHandler.FindByUsername)
 	}
-
 	protectedAccountGroup := accountGroup.Group("")
+
 	protectedAccountGroup.Use(jwt.JWTAuth(accountRepository, cache))
 	{
 		protectedAccountGroup.POST("/logout", accountHandler.Logout)
