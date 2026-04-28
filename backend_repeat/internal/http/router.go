@@ -11,6 +11,7 @@ import (
 
 	"feedsystem_video_go/internal/account"
 	"feedsystem_video_go/internal/config"
+	"feedsystem_video_go/internal/middleware/jwt"
 	"feedsystem_video_go/internal/middleware/rabbitmq"
 	"feedsystem_video_go/internal/middleware/ratelimit"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
@@ -49,6 +50,12 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 		accountGroup.POST("/changePassword", accountHandler.ChangePassword)
 		accountGroup.POST("/findByID", accountHandler.FindByID)
 		accountGroup.POST("/findByUsername", accountHandler.FindByUsername)
+	}
+	protectedAccountGroup := accountGroup.Group("")
+	protectedAccountGroup.Use(jwt.JWTAuth(accountRepository, cache))
+	{
+		protectedAccountGroup.POST("/logout", accountHandler.Logout)
+		protectedAccountGroup.POST("/rename", accountHandler.Rename)
 	}
 	return r
 }

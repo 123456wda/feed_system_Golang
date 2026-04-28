@@ -1,9 +1,11 @@
 package account
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type AccountHandler struct {
@@ -89,4 +91,61 @@ func (h *AccountHandler) FindByUsername(c *gin.Context) {
 	} else {
 		c.JSON(http.StatusOK, account)
 	}
+}
+
+func (h *AccountHandler) Logout(c *gin.Context) {
+	accountID, err := GetAccountID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// service层
+	if err := h.accountService.Logout(c.Request.Context(), accountID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "account logged out"})
+}
+
+func GetAccountID(c *gin.Context) (uint, error) {
+	uidValue, exists := c.Get("accountID")
+	if !exists {
+		return 0, errors.New("accountID not found")
+	}
+	accountID, ok := uidValue.(uint)
+	if !ok {
+		return 0, errors.New("accountID has invalid type")
+	}
+	return accountID, nil
+}
+
+func (h *AccountHandler) Rename(c *gin.Context) {
+	var req RenameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	accountID, err := GetAccountID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// 参数校验合法
+	// 因为修改了用户名,所以要重新签发Token
+	token, err := h.accountService.Rename(c.Request.Context(), accountID, req.NewUsername)
+	if err != nil {
+		if errors.Is(err, ErrUsernameTaken) {
+			c.JSON(409, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(404, gin.H{"error": "account not found"})
+			return
+		}
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"token": token})
 }

@@ -41,3 +41,7 @@ func (r *AccountRepository) Logout(ctx context.Context, id uint) error {
 func (r *AccountRepository) ChangePassword(ctx context.Context, id uint, newPassword string) error {
 	return r.db.WithContext(ctx).Model(&Account{}).Where("id = ?", id).Update("password", newPassword).Error
 }
+
+func (r *AccountRepository) RenameWithToken(ctx context.Context, accountID uint, newUsername string, token string) error {
+	return r.db.Model(&Account{}).Where("id=?", accountID).Updates(map[string]interface{}{"username": newUsername, "token": token}).Error
+}

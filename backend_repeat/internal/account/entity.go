@@ -35,3 +35,8 @@ type FindByIDRequest struct {
 type FindByUsernameRequest struct {
 	Username string `json:"username" binding:"required"`
 }
+
+// 捕获重命名请求参数
+type RenameRequest struct {
+	NewUsername string `json:"new_username" binding:"required"`
+}

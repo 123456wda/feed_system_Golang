@@ -63,11 +63,3 @@ func (c *Client) IncrementWithExpire(ctx context.Context, key string, expireTime
 		expireTime.Milliseconds(),
 	).Int64()
 }
-
-func (c *Client) SetBytes(ctx context.Context, key string, value []byte, time time.Duration) error {
-	return c.rdb.Set(ctx, key, value, time).Err()
-}
-
-func (c *Client) Del(ctx context.Context, key string)error{
-	return c.rdb.Del(ctx,key).Err()
-}

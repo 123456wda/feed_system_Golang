@@ -108,7 +108,6 @@ func check(c *gin.Context, claims *auth.Claims, tokenString string, accountRepo 
 	c.Set("accountID", claims.AccountID)
 	c.Set("username", claims.Username)
 	c.Next()
-
 }
 
 func GetAccountID(c *gin.Context) (uint, error) {

@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -11,6 +12,8 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 )
+
+var ErrUsernameTaken = errors.New("username already exists")
 
 type AccountService struct {
 	accountRepository *AccountRepository
@@ -133,4 +136,25 @@ func (s *AccountService) Logout(ctx context.Context, id uint) error {
 	}
 	// 清除数据库里面的Token
 	return s.accountRepository.Logout(ctx, account.ID)
+}
+
+func (s *AccountService) Rename(ctx context.Context, accountID uint, newUsername string) (string, error) {
+	// 创造一个token
+	tokenString, err := auth.GenerateToken(accountID, newUsername)
+	if err != nil {
+		return "", err
+	}
+	// 修改对应数据库
+	if err := s.accountRepository.RenameWithToken(ctx, accountID, newUsername, tokenString); err != nil {
+		return "", err
+	}
+	// 回源Redis
+	if s.cache != nil {
+		cacheCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+		defer cancel()
+		if err := s.cache.SetBytes(cacheCtx, fmt.Sprintf("account:%d", accountID), []byte(tokenString), time.Hour*24); err != nil {
+			log.Printf("warning redis cache(newUsername token): %v", err)
+		}
+	}
+	return tokenString, nil
 }
