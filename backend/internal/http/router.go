@@ -50,6 +50,7 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rmq *rabbitmq.RabbitMQ) *g
 		protectedAccountGroup.POST("/logout", accountHandler.Logout)
 		protectedAccountGroup.POST("/rename", accountHandler.Rename)
 	}
+
 	// video
 	videoRepository := video.NewVideoRepository(db)
 	popularityMQ, err := rabbitmq.NewPopularityMQ(rmq)
@@ -71,6 +72,7 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rmq *rabbitmq.RabbitMQ) *g
 		protectedVideoGroup.POST("/uploadCover", videoHandler.UploadCover)
 		protectedVideoGroup.POST("/publish", videoHandler.PublishVideo)
 	}
+
 	// like
 	likeMQ, err := rabbitmq.NewLikeMQ(rmq)
 	if err != nil {

@@ -10,7 +10,9 @@ import (
 	"feedsystem_video_go/internal/auth"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
 
+	"github.com/go-sql-driver/mysql"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 var ErrUsernameTaken = errors.New("username already exists")
@@ -146,6 +148,13 @@ func (s *AccountService) Rename(ctx context.Context, accountID uint, newUsername
 	}
 	// 修改对应数据库
 	if err := s.accountRepository.RenameWithToken(ctx, accountID, newUsername, tokenString); err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return "", ErrUsernameTaken
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", err
+		}
 		return "", err
 	}
 	// 回源Redis

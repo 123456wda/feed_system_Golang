@@ -35,7 +35,7 @@ func (r *AccountRepository) Login(ctx context.Context, account *Account) error {
 }
 
 func (r *AccountRepository) Logout(ctx context.Context, id uint) error {
-	return r.db.Model(&Account{}).Where("id=?", id).Update("Token", "").Error
+	return r.db.WithContext(ctx).Model(&Account{}).Where("id=?", id).Update("token", "").Error
 }
 
 func (r *AccountRepository) ChangePassword(ctx context.Context, id uint, newPassword string) error {
@@ -43,5 +43,17 @@ func (r *AccountRepository) ChangePassword(ctx context.Context, id uint, newPass
 }
 
 func (r *AccountRepository) RenameWithToken(ctx context.Context, accountID uint, newUsername string, token string) error {
-	return r.db.Model(&Account{}).Where("id=?", accountID).Updates(map[string]interface{}{"username": newUsername, "token": token}).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&Account{}).Where("id = ?", accountID).Update("username", newUsername)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		if err := tx.Model(&Account{}).Where("id = ?", accountID).Update("token", token).Error; err != nil {
+			return err
+		}
+		return nil
+	})
 }

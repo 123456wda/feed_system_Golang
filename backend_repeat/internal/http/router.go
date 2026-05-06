@@ -15,6 +15,7 @@ import (
 	"feedsystem_video_go/internal/middleware/rabbitmq"
 	"feedsystem_video_go/internal/middleware/ratelimit"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
+	"feedsystem_video_go/internal/video"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -56,6 +57,55 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 	{
 		protectedAccountGroup.POST("/logout", accountHandler.Logout)
 		protectedAccountGroup.POST("/rename", accountHandler.Rename)
+	}
+
+	// 处理video相关业务的路由
+	videoRepository := video.NewVideoRepository(db)
+	// 在通用rabbitmq客户端连接的基础上封装一层popularity的Topic封装,处于生产者地位
+	popularityMQ, err := rabbitmq.NewPopularityMQ(rbq)
+	if err != nil {
+		log.Printf("PopularityMQ init failed (mq disabled): %v", err)
+		popularityMQ = nil
+	}
+	videoService := video.NewVideoService(videoRepository, cache, popularityMQ)
+	videoHandler := video.NewVideoHandler(videoService, accountRepository)
+	videoGroup := r.Group("/video")
+	{
+		videoGroup.POST("/listByAuthorID", videoHandler.ListByAuthorID)
+		videoGroup.POST("/getDetail", videoHandler.GetDetail)
+	}
+	protectedVideoGroup := videoGroup.Group("")
+	protectedVideoGroup.Use(jwt.JWTAuth(accountRepository, cache))
+	{
+		// 上传视频到后端服务的本地文件夹
+		protectedVideoGroup.POST("/uploadVideo", videoHandler.UploadVideo)
+		// 上传视频封面到后端服务的本地文件夹
+		protectedVideoGroup.POST("/uploadCover", videoHandler.UploadCover)
+		// 发布视频,把视频对应元数据存储到后端数据库里面
+		protectedVideoGroup.POST("/publish", videoHandler.PublishVideo)
+	}
+
+	// 处理like相关业务的路由
+
+	// 先初始化一下限流器
+	likeLimiter := ratelimit.Limit(cache, "like_write", 10, time.Minute, ratelimit.KeyByIP)
+
+	likeMQ, err := rabbitmq.NewLikeMQ(rbq)
+	if err != nil {
+		log.Printf("LikeMQ init failed (mq disabled): %v", err)
+		likeMQ = nil
+	}
+	likeRepository := video.NewLikeRepository(db)
+	likeService := video.NewLikeService(likeRepository, videoRepository, cache, likeMQ, popularityMQ)
+	likeHandler := video.NewLikeHandler(likeService)
+	likeGroup := r.Group("/like")
+	protectedLikeGroup := likeGroup.Group("")
+	protectedLikeGroup.Use(jwt.JWTAuth(accountRepository, cache))
+	{
+		protectedLikeGroup.POST("/like", likeLimiter, likeHandler.Like)
+		protectedLikeGroup.POST("/unlike", likeLimiter, likeHandler.Unlike)
+		protectedLikeGroup.POST("/isLiked", likeHandler.IsLiked)
+		protectedLikeGroup.POST("/listMyLikedVideos", likeHandler.ListMyLikedVideos)
 	}
 	return r
 }

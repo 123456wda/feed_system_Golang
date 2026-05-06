@@ -74,7 +74,7 @@ func check(c *gin.Context, claims *auth.Claims, tokenString string, accountRepo 
 
 	// 尝试回源redias
 	if cache != nil {
-		cacheCtx, cancel := context.WithTimeout(context.Background(), time.Microsecond*500)
+		cacheCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 		defer cancel()
 		if err := cache.SetBytes(cacheCtx, key, []byte(accountInfo.Token), time.Hour*24); err != nil {
 			log.Printf("warning about cache(used for check token): %v", err)

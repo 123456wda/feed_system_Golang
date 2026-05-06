@@ -199,7 +199,7 @@ func (vh *VideoHandler) DeleteVideo(c *gin.Context) {
 func (vh *VideoHandler) ListByAuthorID(c *gin.Context) {
 	var req ListByAuthorIDRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	videos, err := vh.service.ListByAuthorID(c.Request.Context(), req.AuthorID)

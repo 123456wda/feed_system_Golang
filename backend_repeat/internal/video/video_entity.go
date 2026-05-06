@@ -23,3 +23,21 @@ type OutboxMsg struct {
 	CreateTime time.Time `gorm:"autoCreateTime"`
 	Status     string    `gorm:"type:varchar(50);index"`
 }
+
+// 处理根据Authorid罗列视频的请求
+type ListByAuthorIDRequest struct {
+	AuthorID uint `json:"author_id" binding:"required"`
+}
+
+// 处理getDetail请求的参数
+type GetDetailRequest struct {
+	ID uint `json:"id" binding:"required"`
+}
+
+// 处理发布视频参数的结构体
+type PublishVideoRequest struct {
+	Title       string `json:"title" binding:"required"`
+	Description string `json:"description"`
+	PlayURL     string `json:"play_url" binding:"required"`
+	CoverURL    string `json:"cover_url" binding:"required"`
+}
