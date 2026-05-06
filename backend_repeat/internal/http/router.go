@@ -87,9 +87,10 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 
 	// 处理like相关业务的路由
 
-	// 先初始化一下限流器
-	likeLimiter := ratelimit.Limit(cache, "like_write", 10, time.Minute, ratelimit.KeyByIP)
+	// 点赞写操作限流：每用户每分钟最多 30 次，防止恶意刷赞
+	likeLimiter := ratelimit.Limit(cache, "like_write", 30, time.Minute, ratelimit.KeyByAccount)
 
+	// 初始化 LikeMQ 生产者，用于异步投递点赞/取消点赞事件
 	likeMQ, err := rabbitmq.NewLikeMQ(rbq)
 	if err != nil {
 		log.Printf("LikeMQ init failed (mq disabled): %v", err)
@@ -100,11 +101,16 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 	likeHandler := video.NewLikeHandler(likeService)
 	likeGroup := r.Group("/like")
 	protectedLikeGroup := likeGroup.Group("")
+	// 所有点赞接口都需要 JWT 认证
 	protectedLikeGroup.Use(jwt.JWTAuth(accountRepository, cache))
 	{
+		// 点赞操作
 		protectedLikeGroup.POST("/like", likeLimiter, likeHandler.Like)
+		// 取消点赞操作
 		protectedLikeGroup.POST("/unlike", likeLimiter, likeHandler.Unlike)
+		// 查询是否已点赞（仅需登录，不限流）
 		protectedLikeGroup.POST("/isLiked", likeHandler.IsLiked)
+		// 查看我的点赞视频列表（仅需登录，不限流——查询频次低）
 		protectedLikeGroup.POST("/listMyLikedVideos", likeHandler.ListMyLikedVideos)
 	}
 	return r

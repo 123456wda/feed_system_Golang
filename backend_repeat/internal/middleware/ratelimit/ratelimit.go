@@ -3,9 +3,11 @@ package ratelimit
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"feedsystem_video_go/internal/middleware/jwt"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
 
 	"github.com/gin-gonic/gin"
@@ -67,4 +69,14 @@ func KeyByIP(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	return ip, true
+}
+
+// KeyByAccount 从 JWT 中提取用户 ID 作为限流 key。
+// 用于登录后的写操作限流（如点赞、评论），按用户维度限制频率。
+func KeyByAccount(c *gin.Context) (string, bool) {
+	accountID, err := jwt.GetAccountID(c)
+	if err != nil || accountID == 0 {
+		return "", false
+	}
+	return strconv.FormatUint(uint64(accountID), 10), true
 }

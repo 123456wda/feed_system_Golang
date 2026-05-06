@@ -2,6 +2,7 @@ package video
 
 import (
 	"context"
+	"errors"
 
 	"gorm.io/gorm"
 )
@@ -48,4 +49,40 @@ func (r *VideoRepository) PublishVideo(ctx context.Context, video *Video) error 
 	})
 
 	return err
+}
+
+// IsExist 检查视频是否存在，用于点赞/评论前校验目标视频是否有效。
+func (r *VideoRepository) IsExist(ctx context.Context, id uint) (bool, error) {
+	var video Video
+	if err := r.db.WithContext(ctx).First(&video, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// ChangeLikesCount 原子更新点赞数（可增可减），用 GREATEST 兜底防止减成负数。
+// 事务中调用时需传入 tx 而不是 r.db。
+func (r *VideoRepository) ChangeLikesCount(ctx context.Context, tx *gorm.DB, id uint, change int64) error {
+	db := tx
+	if db == nil {
+		db = r.db
+	}
+	return db.WithContext(ctx).Model(&Video{}).
+		Where("id = ?", id).
+		UpdateColumn("likes_count", gorm.Expr("GREATEST(likes_count + ?, 0)", change)).Error
+}
+
+// ChangePopularity 原子更新热度值（点赞+1/取消点赞-1/评论+1 等触发）。
+// 事务中调用时传入 tx，非事务场景传 nil 即可。
+func (r *VideoRepository) ChangePopularity(ctx context.Context, tx *gorm.DB, id uint, change int64) error {
+	db := tx
+	if db == nil {
+		db = r.db
+	}
+	return db.WithContext(ctx).Model(&Video{}).
+		Where("id = ?", id).
+		UpdateColumn("popularity", gorm.Expr("GREATEST(popularity + ?, 0)", change)).Error
 }
