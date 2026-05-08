@@ -153,3 +153,35 @@ func (s *VideoService) PublishVideo(ctx context.Context, video *Video) error {
 	// 进行初步参数校验
 	return s.repo.PublishVideo(ctx, video)
 }
+
+// Delete 删除视频，先校验视频存在性和所有权，再删除数据库记录，最后清除 Redis 缓存。
+func (s *VideoService) Delete(ctx context.Context, id uint, authorID uint) error {
+	// 第一步：根据 ID 查询视频是否存在
+	video, err := s.repo.GetDetail(ctx, id)
+	if err != nil {
+		return err
+	}
+	// 视频不存在则直接返回错误
+	if video == nil {
+		return errors.New("video not found")
+	}
+	// 权限校验：只有视频作者本人才能删除
+	if video.AuthorID != authorID {
+		return errors.New("unauthorized")
+	}
+	// 执行数据库删除
+	if err := s.repo.DeleteVideo(ctx, id); err != nil {
+		return err
+	}
+	// 删除成功后清除详情缓存，避免用户读到已删除视频的旧数据
+	if s.cache != nil {
+		cacheKey := fmt.Sprintf("video:detail:id=%d", id)
+		_ = s.cache.Del(context.Background(), cacheKey)
+	}
+	return nil
+}
+
+// UpdateLikesCount 设置视频的点赞数为指定绝对值（供 like worker 同步使用）。
+func (s *VideoService) UpdateLikesCount(ctx context.Context, id uint, likesCount int64) error {
+	return s.repo.SetLikesCount(ctx, id, likesCount)
+}

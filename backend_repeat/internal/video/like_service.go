@@ -14,9 +14,9 @@ import (
 // LikeService 处理点赞相关业务逻辑。
 // 设计原则：MQ 优先异步写入，MQ 不可用时降级为同步 MySQL 事务。
 // 优化点（相比原始版本）：
-//   1. 移除前置 IsLiked 检查，依赖唯一索引防重，消除 TOCTOU 竞态窗口
-//   2. Service 不直接访问 repo.db，事务操作通过 LikeRepository.Transaction + 事务方法
-//   3. 变量命名纠正：likeMQSent / popularityMQSent 明确表达 MQ 投递状态
+//  1. 移除前置 IsLiked 检查，依赖唯一索引防重，消除 TOCTOU 竞态窗口
+//  2. Service 不直接访问 repo.db，事务操作通过 LikeRepository.Transaction + 事务方法
+//  3. 变量命名纠正：likeMQSent / popularityMQSent 明确表达 MQ 投递状态
 type LikeService struct {
 	likeRepo     *LikeRepository
 	videoRepo    *VideoRepository
@@ -43,10 +43,10 @@ func NewLikeService(
 
 // Like 点赞操作。
 // 流程：
-//   1. 参数校验
-//   2. 确认目标视频存在
-//   3. 尝试 MQ 异步投递（优先路径）
-//   4. MQ 失败 → 降级为同步 MySQL 事务 + Redis 热度更新
+//  1. 参数校验
+//  2. 确认目标视频存在
+//  3. 尝试 MQ 异步投递（优先路径）
+//  4. MQ 失败 → 降级为同步 MySQL 事务 + Redis 热度更新
 func (s *LikeService) Like(ctx context.Context, accountID, videoID uint) error {
 	// 参数校验：用户ID和视频ID缺一不可
 	if accountID == 0 || videoID == 0 {
@@ -105,7 +105,7 @@ func (s *LikeService) Like(ctx context.Context, accountID, videoID uint) error {
 			if err := s.videoRepo.ChangeLikesCount(ctx, tx, videoID, 1); err != nil {
 				return err
 			}
-			// 原子增加热度
+			// 原子增加热度（必须传 tx，保证和点赞记录在同一个事务里）
 			if err := s.videoRepo.ChangePopularity(ctx, tx, videoID, 1); err != nil {
 				return err
 			}
@@ -176,7 +176,7 @@ func (s *LikeService) Unlike(ctx context.Context, accountID, videoID uint) error
 			if err := s.videoRepo.ChangeLikesCount(ctx, tx, videoID, -1); err != nil {
 				return err
 			}
-			// 原子扣减热度
+			// 原子扣减热度（必须传 tx，保证和删除操作在同一个事务里）
 			if err := s.videoRepo.ChangePopularity(ctx, tx, videoID, -1); err != nil {
 				return err
 			}

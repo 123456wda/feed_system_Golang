@@ -228,6 +228,46 @@ func (h *VideoHandler) PublishVideo(c *gin.Context) {
 	c.JSON(http.StatusOK, video)
 }
 
+// DeleteVideo 删除视频接口，POST /video/delete，需要 JWT 登录。
+// 流程：解析请求体 → 从 JWT 获取当前用户 ID → 调用 service 层校验权限并删除。
+func (h *VideoHandler) DeleteVideo(c *gin.Context) {
+	// 解析请求体中的视频 ID
+	var req DeleteVideoRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// 从 JWT 上下文中获取当前登录用户 ID，用于权限校验
+	authorID, err := jwt.GetAccountID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// 调用 service 层：校验视频存在性 + 所有权 + 删除 + 清缓存
+	if err := h.s.Delete(c.Request.Context(), req.ID, authorID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "video deleted"})
+}
+
+// UpdateLikesCount 更新点赞数接口，POST /video/updateLikesCount，需要 JWT 登录。
+// 用于外部同步场景，直接将点赞数设置为指定绝对值（区别于 like worker 的增量更新）。
+func (h *VideoHandler) UpdateLikesCount(c *gin.Context) {
+	// 解析请求体中的视频 ID 和目标点赞数
+	var req UpdateLikesCountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// 调用 service 层直接设置点赞数绝对值
+	if err := h.s.UpdateLikesCount(c.Request.Context(), req.ID, req.LikesCount); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "likes count updated"})
+}
+
 func randHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)

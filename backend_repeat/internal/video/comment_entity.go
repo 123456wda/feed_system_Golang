@@ -10,3 +10,17 @@ type Comment struct {
 	Content   string    `gorm:"type:text" json:"content"`
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 }
+
+type GetAllCommentsRequest struct {
+	VideoID uint `json:"video_id" binding:"required"`
+}
+
+type PublishCommentRequest struct {
+	Content string `json:"content" binding:"required"`
+	VideoID uint   `json:"video_id" binding:"required"`
+}
+
+// 处理删除评论请求的结构体
+type DeleteCommentRequest struct {
+	CommentID uint `json:"comment_id" binding:"required"`
+}

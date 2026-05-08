@@ -83,6 +83,10 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 		protectedVideoGroup.POST("/uploadCover", videoHandler.UploadCover)
 		// 发布视频,把视频对应元数据存储到后端数据库里面
 		protectedVideoGroup.POST("/publish", videoHandler.PublishVideo)
+		// 删除视频（仅作者本人可操作）
+		protectedVideoGroup.POST("/delete", videoHandler.DeleteVideo)
+		// 更新点赞数（供内部同步使用）
+		protectedVideoGroup.POST("/updateLikesCount", videoHandler.UpdateLikesCount)
 	}
 
 	// 处理like相关业务的路由
@@ -112,6 +116,30 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 		protectedLikeGroup.POST("/isLiked", likeHandler.IsLiked)
 		// 查看我的点赞视频列表（仅需登录，不限流——查询频次低）
 		protectedLikeGroup.POST("/listMyLikedVideos", likeHandler.ListMyLikedVideos)
+	}
+
+	// 处理comment相关业务的路由
+
+	// 组装一下限流器
+	commentLimiter := ratelimit.Limit(cache, "comment_write", 10, time.Minute, ratelimit.KeyByAccount)
+
+	commentRepository := video.NewCommentRepository(db)
+	commentMQ, err := rabbitmq.NewCommentMQ(rbq)
+	if err != nil {
+		log.Printf("CommentMQ init failed (mq disabled): %v", err)
+		commentMQ = nil
+	}
+	commentService := video.NewCommentService(commentRepository, videoRepository, cache, commentMQ, popularityMQ)
+	commentHandler := video.NewCommentHandler(commentService, accountService)
+	commentGroup := r.Group("/comment")
+	{
+		commentGroup.POST("/listAll", commentHandler.GetAllComments)
+	}
+	protectedCommentGroup := commentGroup.Group("")
+	protectedCommentGroup.Use(jwt.JWTAuth(accountRepository, cache))
+	{
+		protectedCommentGroup.POST("/publish", commentLimiter, commentHandler.PublishComment)
+		protectedCommentGroup.POST("/delete", commentLimiter, commentHandler.DeleteComment)
 	}
 	return r
 }

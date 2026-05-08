@@ -25,7 +25,7 @@ func isDuplicateKey(err error) bool {
 
 // LikeIgnoreDuplicate 插入点赞记录，若已存在则静默忽略（不报错）。
 // 返回 created=true 表示实际插入了新记录，created=false 表示已存在（幂等）。
-// 优化点：不再前置 IsLiked 检查，依赖数据库唯一索引保证幂等，消除 TOCTOU 竞态窗口。
+// 供消费者使用,在多次发送同一点赞消息的时候,前面的消息处理完后,后面的消息查到已存在后静默忽略
 //
 //	幂等指的是：同一个操作执行一次和执行多次，产生的最终结果相同，且不会带来额外的副作用。比如一个点赞操作同时执行多次,实际最终只被点赞一次
 func (r *LikeRepository) LikeIgnoreDuplicate(ctx context.Context, like *Like) (created bool, err error) {

@@ -51,6 +51,11 @@ func (r *VideoRepository) PublishVideo(ctx context.Context, video *Video) error 
 	return err
 }
 
+// DeleteVideo 根据主键删除视频记录。
+func (r *VideoRepository) DeleteVideo(ctx context.Context, id uint) error {
+	return r.db.WithContext(ctx).Delete(&Video{}, id).Error
+}
+
 // IsExist 检查视频是否存在，用于点赞/评论前校验目标视频是否有效。
 func (r *VideoRepository) IsExist(ctx context.Context, id uint) (bool, error) {
 	var video Video
@@ -75,8 +80,15 @@ func (r *VideoRepository) ChangeLikesCount(ctx context.Context, tx *gorm.DB, id 
 		UpdateColumn("likes_count", gorm.Expr("GREATEST(likes_count + ?, 0)", change)).Error
 }
 
+// SetLikesCount 直接设置点赞数为指定绝对值（用于外部同步接口，区别于 ChangeLikesCount 的增量更新）。
+func (r *VideoRepository) SetLikesCount(ctx context.Context, id uint, likesCount int64) error {
+	return r.db.WithContext(ctx).Model(&Video{}).
+		Where("id = ?", id).
+		UpdateColumn("likes_count", likesCount).Error
+}
+
 // ChangePopularity 原子更新热度值（点赞+1/取消点赞-1/评论+1 等触发）。
-// 事务中调用时传入 tx，非事务场景传 nil 即可。
+// 事务中调用时传入 tx，非事务场景传 nil 即可（内部自动降级为 r.db）。
 func (r *VideoRepository) ChangePopularity(ctx context.Context, tx *gorm.DB, id uint, change int64) error {
 	db := tx
 	if db == nil {

@@ -41,3 +41,14 @@ type PublishVideoRequest struct {
 	PlayURL     string `json:"play_url" binding:"required"`
 	CoverURL    string `json:"cover_url" binding:"required"`
 }
+
+// 处理删除视频请求的结构体
+type DeleteVideoRequest struct {
+	ID uint `json:"id" binding:"required"`
+}
+
+// 处理更新点赞数请求的结构体，用于设置绝对值（区别于 ChangeLikesCount 的增量更新）
+type UpdateLikesCountRequest struct {
+	ID         uint  `json:"id" binding:"required"`
+	LikesCount int64 `json:"likes_count" binding:"required"`
+}
