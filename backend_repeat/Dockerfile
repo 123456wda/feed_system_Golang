@@ -3,10 +3,10 @@ ARG GO_VERSION=1.24.5
 FROM golang:${GO_VERSION} AS build
 WORKDIR /src/backend
 
-COPY backend/go.mod backend/go.sum ./
+COPY backend_repeat/go.mod backend_repeat/go.sum ./
 RUN go mod download
 
-COPY backend/ ./
+COPY backend_repeat/ ./
 
 ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags="-s -w" -o /out/api ./cmd

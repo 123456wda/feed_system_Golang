@@ -39,7 +39,6 @@ func Limit(
 			return
 		}
 		key := buildKey(keyPrefix, subject)
-		fmt.Println(key)
 		// 下面对redis缓存操作
 		count, err := cache.IncrementWithExpire(c.Request.Context(), key, window)
 		if err != nil {
@@ -50,6 +49,7 @@ func Limit(
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 				"error": "too many requests",
 			})
+			return
 		}
 		c.Next()
 	}

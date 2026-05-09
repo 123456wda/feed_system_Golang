@@ -56,13 +56,13 @@ services:
   backend:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: backend_repeat/Dockerfile
       target: api
     restart: always
     ports:
       - "8080:8080"
     volumes:
-      - ./backend/configs/config.docker.yaml:/app/configs/config.yaml:ro
+      - ./backend_repeat/configs/config.docker.yaml:/app/configs/config.yaml:ro
       - backend_uploads:/app/.run/uploads
     depends_on:
       mysql:
@@ -75,11 +75,11 @@ services:
   worker:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: backend_repeat/Dockerfile
       target: worker
     restart: always
     volumes:
-      - ./backend/configs/config.docker.yaml:/app/configs/config.yaml:ro
+      - ./backend_repeat/configs/config.docker.yaml:/app/configs/config.yaml:ro
     depends_on:
       mysql:
         condition: service_healthy

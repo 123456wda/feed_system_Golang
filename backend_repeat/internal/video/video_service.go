@@ -11,23 +11,25 @@ import (
 
 	"feedsystem_video_go/internal/middleware/rabbitmq"
 
+	gocache "github.com/patrickmn/go-cache"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
 )
 
 var ErrInvalidAuthorID = errors.New("invalid author_id")
 
 type VideoService struct {
-	repo     *VideoRepository
-	rmq      *rabbitmq.PopularityMQ
-	cache    *rediscache.Client
-	cacheTTL time.Duration
+	repo       *VideoRepository
+	rmq        *rabbitmq.PopularityMQ
+	cache      *rediscache.Client
+	localcache *gocache.Cache
+	cacheTTL   time.Duration
 }
 
 func NewVideoService(repo *VideoRepository, cache *rediscache.Client, rmq *rabbitmq.PopularityMQ) *VideoService {
 	if repo == nil || cache == nil || rmq == nil {
 		panic("nil pointer")
 	}
-	return &VideoService{repo, rmq, cache, 5 * time.Minute}
+	return &VideoService{repo, rmq, cache, gocache.New(3*time.Second, 5*time.Second), 5 * time.Minute}
 }
 
 func (s *VideoService) ListByAuthorID(ctx context.Context, authorID uint) ([]Video, error) {
@@ -40,7 +42,17 @@ func (s *VideoService) ListByAuthorID(ctx context.Context, authorID uint) ([]Vid
 
 func (s *VideoService) GetDetail(ctx context.Context, id uint) (*Video, error) {
 	cacheKey := fmt.Sprintf("video:detail:id=%d", id)
-	// 封装两个对缓存操作的闭包函数
+
+	// L1: 本地缓存
+	if s.localcache != nil {
+		if v, found := s.localcache.Get(cacheKey); found {
+			if video, ok := v.(Video); ok {
+				return &video, nil
+			}
+		}
+	}
+
+	// L2: Redis 缓存
 	GetCache := func() (*Video, error) {
 		cacheCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 		defer cancel()
@@ -71,6 +83,7 @@ func (s *VideoService) GetDetail(ctx context.Context, id uint) (*Video, error) {
 	if s.cache != nil {
 		video, err := GetCache()
 		if err == nil {
+			s.localcache.Set(cacheKey, *video, 5*time.Second)
 			return video, nil
 		} else if rediscache.IsMiss(err) {
 			lockKey := "lock:" + cacheKey
@@ -90,6 +103,7 @@ func (s *VideoService) GetDetail(ctx context.Context, id uint) (*Video, error) {
 
 				v, err := GetCache()
 				if err == nil {
+					s.localcache.Set(cacheKey, *v, 5*time.Second)
 					return v, nil
 				}
 
@@ -100,6 +114,7 @@ func (s *VideoService) GetDetail(ctx context.Context, id uint) (*Video, error) {
 				if err := SetCached(video); err != nil {
 					log.Printf("warning redis cache(getDetail): %v", err)
 				}
+				s.localcache.Set(cacheKey, *video, 5*time.Second)
 				return video, nil
 			}
 
@@ -111,6 +126,7 @@ func (s *VideoService) GetDetail(ctx context.Context, id uint) (*Video, error) {
 				case <-time.After(20 * time.Millisecond):
 				}
 				if v, err := GetCache(); err == nil {
+					s.localcache.Set(cacheKey, *v, 5*time.Second)
 					return v, nil
 				}
 			}
@@ -130,6 +146,7 @@ func (s *VideoService) GetDetail(ctx context.Context, id uint) (*Video, error) {
 			log.Printf("warning redis cache(getDetail): %v", err)
 		}
 	}
+	s.localcache.Set(cacheKey, *video, 5*time.Second)
 	return video, nil
 }
 
@@ -174,10 +191,11 @@ func (s *VideoService) Delete(ctx context.Context, id uint, authorID uint) error
 		return err
 	}
 	// 删除成功后清除详情缓存，避免用户读到已删除视频的旧数据
+	cacheKey := fmt.Sprintf("video:detail:id=%d", id)
 	if s.cache != nil {
-		cacheKey := fmt.Sprintf("video:detail:id=%d", id)
 		_ = s.cache.Del(context.Background(), cacheKey)
 	}
+	s.localcache.Delete(cacheKey)
 	return nil
 }
 

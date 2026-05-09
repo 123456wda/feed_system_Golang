@@ -33,17 +33,16 @@ func (f *FeedHandler) ListLatest(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be between 1 and 100"})
 		return
 	}
-	id, err := jwt.GetAccountID(c)
+	viewerAccountID, err := jwt.GetAccountID(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
-		return
+		viewerAccountID = 0
 	}
 
 	var latestTime time.Time
 	if req.LatestTime > 0 {
 		latestTime = time.UnixMilli(req.LatestTime)
 	}
-	feedItems, err := f.service.ListLatest(c.Request.Context(), req.Limit, latestTime, id)
+	feedItems, err := f.service.ListLatest(c.Request.Context(), req.Limit, latestTime, viewerAccountID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
