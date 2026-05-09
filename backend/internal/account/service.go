@@ -3,10 +3,11 @@ package account
 import (
 	"context"
 	"errors"
-	"feedsystem_video_go/internal/auth"
 	"fmt"
 	"log"
 	"time"
+
+	"feedsystem_video_go/internal/auth"
 
 	rediscache "feedsystem_video_go/internal/middleware/redis"
 

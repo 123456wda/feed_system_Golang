@@ -3,12 +3,13 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"feedsystem_video_go/internal/middleware/rabbitmq"
-	"feedsystem_video_go/internal/middleware/redis"
-	"feedsystem_video_go/internal/video"
 	"fmt"
 	"log"
 	"time"
+
+	"feedsystem_video_go/internal/middleware/rabbitmq"
+	"feedsystem_video_go/internal/middleware/redis"
+	"feedsystem_video_go/internal/video"
 
 	oredis "github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -49,7 +50,6 @@ func StartConsumer(tmq *rabbitmq.TimelineMQ, queueName string, redisClient *redi
 		false,
 		nil,
 	)
-
 	if err != nil {
 		log.Printf("注册消费失败")
 		return
@@ -59,7 +59,6 @@ func StartConsumer(tmq *rabbitmq.TimelineMQ, queueName string, redisClient *redi
 		for msg := range msgs {
 			var event rabbitmq.TimelineEvent
 			err := json.Unmarshal(msg.Body, &event)
-
 			if err != nil {
 				log.Printf("反序列化失败")
 				msg.Ack(false)
@@ -72,7 +71,6 @@ func StartConsumer(tmq *rabbitmq.TimelineMQ, queueName string, redisClient *redi
 				Score:  float64(event.CreateTime),
 				Member: fmt.Sprintf("%d", event.VideoID),
 			})
-
 			if err != nil {
 				log.Printf("写入Zset失败")
 				msg.Nack(false, true)
@@ -81,7 +79,6 @@ func StartConsumer(tmq *rabbitmq.TimelineMQ, queueName string, redisClient *redi
 			}
 
 			err = redisClient.ZRemRangeByRank(ctx, timelineKey, 0, -1001)
-
 			if err != nil {
 				log.Printf("ZRem失败")
 			}

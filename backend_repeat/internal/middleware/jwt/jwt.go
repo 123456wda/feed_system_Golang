@@ -87,6 +87,30 @@ func check(c *gin.Context, claims *auth.Claims, tokenString string, accountRepo 
 	return
 }
 
+// SoftJWTAuth 软认证中间件：有 token 则解析身份写入上下文，没有 token 也放行。
+// 用于公共接口（如 feed/listLatest），未登录也能访问，但登录用户能拿到个性化数据（如 is_liked）。
+func SoftJWTAuth(accountRepo *account.AccountRepository, cache *rediscache.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.Next()
+			return
+		}
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization header"})
+			return
+		}
+		tokenString := parts[1]
+		claims, err := auth.ParseToken(tokenString)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
+			return
+		}
+		check(c, claims, tokenString, accountRepo, cache)
+	}
+}
+
 func GetAccountID(c *gin.Context) (uint, error) {
 	uidValue, exists := c.Get("accountID")
 	if !exists {
