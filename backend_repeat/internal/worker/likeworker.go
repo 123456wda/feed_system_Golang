@@ -11,6 +11,7 @@ import (
 	"feedsystem_video_go/internal/video"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"gorm.io/gorm"
 )
 
 // LikeWorker 消费 likeMQ 的消息，负责将点赞/取消点赞事件同步写入 MySQL 和 Redis。
@@ -73,6 +74,7 @@ func (w *LikeWorker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 	}
 	// 确认消息已被正确处理
 	_ = d.Ack(false)
+	rabbitmq.IncrConsumed(w.queue)
 }
 
 // process 解析 LikeEvent JSON，根据 Action 字段分发到 applyLike 或 applyUnlike。
@@ -103,7 +105,7 @@ func (w *LikeWorker) process(ctx context.Context, body []byte) error {
 }
 
 // applyLike 处理点赞事件：检查视频存在 → 幂等插入点赞记录 → 更新计数 + 热度。
-// 使用 LikeIgnoreDuplicate 保证幂等性：
+// 使用 LikeIgnoreDuplicateInTx 保证幂等性：
 //   - 重复点赞消息 → created=false → 不更新计数，直接返回
 //   - 首次点赞消息 → created=true → 更新点赞数和热度
 func (w *LikeWorker) applyLike(ctx context.Context, userID, videoID uint) error {
@@ -117,35 +119,38 @@ func (w *LikeWorker) applyLike(ctx context.Context, userID, videoID uint) error 
 		return nil
 	}
 
-	// 幂等插入点赞记录，遇 1062 重复键返回 created=false
-	created, err := w.likeRepo.LikeIgnoreDuplicate(ctx, &video.Like{
-		VideoID:   videoID,
-		AccountID: userID,
-		CreatedAt: time.Now(),
-	})
-	if err != nil {
-		return err
-	}
-	if !created {
-		// 点赞记录已存在（重复消息），跳过计数更新
-		return nil
-	}
+	return w.likeRepo.Transaction(ctx, func(tx *gorm.DB) error {
+		// 幂等插入点赞记录，遇 1062 重复键返回 created=false
+		created, err := w.likeRepo.LikeIgnoreDuplicateInTx(ctx, tx, &video.Like{
+			VideoID:   videoID,
+			AccountID: userID,
+			CreatedAt: time.Now(),
+		})
+		if err != nil {
+			return err
+		}
+		if !created {
+			// 点赞记录已存在（重复消息），跳过计数更新
+			return nil
+		}
 
-	// 只有真正创建了新记录才更新计数
-	// 原子增加点赞数
-	if err := w.videoRepo.ChangeLikesCount(ctx, nil, videoID, 1); err != nil {
-		return err
-	}
-	// 原子增加热度
-	return w.videoRepo.ChangePopularity(ctx, nil, videoID, 1)
+		// 只有真正创建了新记录才更新计数
+		// 原子增加点赞数
+		if err := w.videoRepo.ChangeLikesCount(ctx, tx, videoID, 1); err != nil {
+			return err
+		}
+		// 原子增加热度
+		return w.videoRepo.ChangePopularity(ctx, tx, videoID, 1)
+	})
 }
 
 // applyUnlike 处理取消点赞事件：检查视频存在 → 删除点赞记录 → 扣减计数 + 热度。
-// 使用 DeleteByVideoAndAccount 的 deleted 返回值判断是否真的删除了记录：
+// 使用 DeleteByVideoAndAccountTx 的 deleted 返回值判断是否真的删除了记录：
 //   - 重复取消点赞消息 → deleted=false → 跳过计数更新
 //   - 首次取消点赞消息 → deleted=true → 扣减点赞数和热度
+// 事务保证删除记录和扣减计数的原子性，避免部分成功导致数据不一致。
 func (w *LikeWorker) applyUnlike(ctx context.Context, userID, videoID uint) error {
-	// 确认视频存在
+	// 确认视频存在，若视频已删除则丢弃该消息
 	ok, err := w.videoRepo.IsExist(ctx, videoID)
 	if err != nil {
 		return err
@@ -154,19 +159,21 @@ func (w *LikeWorker) applyUnlike(ctx context.Context, userID, videoID uint) erro
 		return nil
 	}
 
-	// 删除点赞记录，返回 deleted 表示是否真的删到了行
-	deleted, err := w.likeRepo.DeleteByVideoAndAccount(ctx, userID, videoID)
-	if err != nil {
-		return err
-	}
-	if !deleted {
-		// 记录本就不存在（重复消息或根本没点过赞），跳过计数更新
-		return nil
-	}
+	return w.likeRepo.Transaction(ctx, func(tx *gorm.DB) error {
+		// 删除点赞记录，返回 deleted 表示是否真的删到了行
+		deleted, err := w.likeRepo.DeleteByVideoAndAccountTx(ctx, tx, videoID, userID)
+		if err != nil {
+			return err
+		}
+		if !deleted {
+			// 记录本就不存在（重复消息或根本没点过赞），跳过计数更新
+			return nil
+		}
 
-	// 只有真正删除了记录才扣减计数（GREATEST 兜底防止负数）
-	if err := w.videoRepo.ChangeLikesCount(ctx, nil, videoID, -1); err != nil {
-		return err
-	}
-	return w.videoRepo.ChangePopularity(ctx, nil, videoID, -1)
+		// 只有真正删除了记录才扣减计数（GREATEST 兜底防止负数）
+		if err := w.videoRepo.ChangeLikesCount(ctx, tx, videoID, -1); err != nil {
+			return err
+		}
+		return w.videoRepo.ChangePopularity(ctx, tx, videoID, -1)
+	})
 }

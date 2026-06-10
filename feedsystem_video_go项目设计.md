@@ -9,12 +9,13 @@
 | 开发语言        | Go (Golang)                  | 后端核心业务逻辑实现（API + Worker）。                       |
 | Web 框架        | Gin                          | HTTP 路由注册、参数绑定、统一返回与中间件链（JWTAuth / SoftJWTAuth）。 |
 | ORM 框架        | GORM                         | 模型定义、CRUD、启动时 AutoMigrate 自动迁移表结构。          |
-| 持久化          | MySQL                        | 存储 `Account / Video / Like / Comment / Social` 五张核心表及相关统计字段（如 likes_count、popularity）。 |
+| 持久化          | MySQL                        | 存储 `Account / Video / Like / Comment / Social / OutboxMsg` 六张核心表及相关统计字段（如 likes_count、popularity）。 |
 | 缓存/排行榜     | Redis（可选）                | Token 校验缓存（`account:<id>`）、Feed 匿名流缓存、视频详情缓存、热榜 ZSET（滑动窗口聚合/快照分页）。 |
-| 消息队列        | RabbitMQ（可选）             | Topic 事件总线：`like.events`、`comment.events`、`social.events`、`video.popularity.events`；由 Worker 异步消费写 MySQL/Redis，支持异常降级直写。 |
-| 异步执行        | Worker（Go）                 | `cmd/worker`：LikeWorker/CommentWorker/SocialWorker/PopularityWorker，异步落库、更新计数/热度、更新热榜与缓存失效。 |
+| 消息队列        | RabbitMQ（可选）             | Topic 事件总线：`like.events`、`comment.events`、`social.events`、`video.popularity.events`、`video.timeline.events`；由 Worker 异步消费写 MySQL/Redis，支持异常降级直写。 |
+| 异步执行        | Worker（Go）                 | `cmd/worker`：LikeWorker/CommentWorker/SocialWorker/PopularityWorker/FanoutWorker，异步落库、更新计数/热度、更新热榜与缓存失效、推拉结合 fanout。API 进程内还有 OutboxWorker（轮询器）和 Timeline Consumer。 |
 | 文件存储        | Local Disk（可替换对象存储） | 视频与封面文件存放本地目录（生产可替换为 OSS/S3/MinIO）。    |
 | 容器化/依赖编排 | Docker / Docker Compose      | 一键拉起 RabbitMQ 等依赖（可配合 `./start.sh`），便于本地联调与部署环境一致性。 |
+| 可观测性        | Prometheus + Grafana         | Prometheus 采集 HTTP QPS/P99 延迟、Redis 操作延迟、RabbitMQ 消息吞吐；Grafana 8 面板 Dashboard 可视化。通过 Gin middleware 自动采集 + Redis/MQ 手动埋点实现全链路可观测性。 |
 | 接口调试        | Postman Collection           | `test/postman.json`：预置变量、批量跑接口与部分断言脚本。    |
 | 前端            | Vue + Vite                   | 前端工程 `frontend/`，通过 Vite 代理 `/api` 对接后端。       |
 
@@ -132,15 +133,23 @@
 | 视频详情缓存            | STRING   | `video:detail:id=<videoID>`                       | `Video`（JSON）                   | 5m            | **一致性**：视频删除/更新时主动 `DEL`；**防击穿**：详情回源可加互斥锁（如 2s 锁 TTL）。 |
 | 实时热榜窗              | ZSET     | `hot:video:1m:<yyyyMMddHHmm>`                     | member=`videoID` score=`热度增量` | 2h            | **滚动窗口**：按分钟分桶写入；用 `ZINCRBY` 更新热度，减少单 Key 竞争。 |
 | 热榜快照                | ZSET     | `hot:video:merge:1m:<as_of>`                      | `ZUNIONSTORE` 合并结果            | 2m            | **聚合查询**：合并最近 60 个分钟窗生成快照；快照分页读取，保证分页一致性与稳定性。 |
+| 全局时间线              | ZSET     | `feed:global_timeline`                            | member=`videoID` score=`create_time_ms` | —     | Timeline Consumer 消费后写入；`ZREMRANGEBYRANK` 保留最新 1000 条。 |
+| 用户发件箱              | ZSET     | `user_videos:<authorID>`                          | member=`videoID` score=`create_time_ms` | 24h   | FanoutWorker 写入；保留最新 50 条；大V拉路径数据源。 |
+| 用户收件箱              | ZSET     | `inbox:<followerID>`                              | member=`videoID` score=`create_time_ms` | —     | FanoutWorker 推送；概率裁剪（1%），上限 500 条。 |
+| 大V关注集合             | SET      | `following:bigv:<followerID>`                     | 用户关注的大V ID                  | 24h           | SocialWorker 维护；读路径用于判断需要拉取哪些大V的发件箱。 |
+| 粉丝数缓存             | STRING   | `user:follower_count:<id>`                        | 粉丝数（整数字符串）              | —             | FanoutWorker 判断大V用；关注/取关时更新。 |
+| 用户活跃时间            | STRING   | `user:active:<id>`                                | 登录时间戳                        | 72h           | 登录时写入；FanoutWorker 过滤僵尸粉用。 |
 
 ## RabbitMQ优化部分
 
-| 业务模块 | Exchange / RoutingKey                                 | 事件类型      | Payload（示例字段）                                 | 消费者（Worker）   | 失败/降级策略                                                |
-| -------- | ----------------------------------------------------- | ------------- | --------------------------------------------------- | ------------------ | ------------------------------------------------------------ |
-| 点赞     | `like.events` / `like.like` `like.unlike`             | 点赞/取消点赞 | `{account_id, video_id, ts}`                        | `LikeWorker`       | 发布失败：对失败目标降级直写（MySQL 或 Redis）；确保 `likes` 与计数可落地。 |
-| 评论     | `comment.events` / `comment.publish` `comment.delete` | 发布/删除评论 | `{account_id, video_id, comment_id?, content?, ts}` | `CommentWorker`    | 发布失败：降级直写 MySQL；热度增量事件失败则直接更新 Redis（或同步更新 popularity）。 |
-| 关注     | `social.events` / `social.follow` `social.unfollow`   | 关注/取关     | `{follower_id, vlogger_id, ts}`                     | `SocialWorker`     | 发布失败：降级直写 MySQL，保证关注关系即时生效。             |
-| 热度增量 | `video.popularity.events` / `video.popularity.update` | 热度更新      | `{video_id, delta, reason, ts}`                     | `PopularityWorker` | `UpdatePopularity` 发布失败：直接更新 Redis 热榜；并触发详情缓存失效（如需要）。 |
+| 业务模块 | Exchange / RoutingKey                                 | 事件类型      | Payload（示例字段）                                                 | 消费者（Worker）   | 失败/降级策略                                                |
+| -------- | ----------------------------------------------------- | ------------- | ------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------ |
+| 点赞     | `like.events` / `like.like` `like.unlike`             | 点赞/取消点赞 | `{event_id, action, user_id, video_id, occurred_at}`                | `LikeWorker`       | 发布失败：对失败目标降级直写（MySQL 或 Redis）；确保 `likes` 与计数可落地。 |
+| 评论     | `comment.events` / `comment.publish` `comment.delete` | 发布/删除评论 | `{event_id, action, comment_id?, username?, video_id?, author_id?, content?, occurred_at}` | `CommentWorker`    | 发布失败：降级直写 MySQL；热度增量事件失败则直接更新 Redis（或同步更新 popularity）。 |
+| 关注     | `social.events` / `social.follow` `social.unfollow`   | 关注/取关     | `{event_id, action, follower_id, vlogger_id, occurred_at}`          | `SocialWorker`     | 发布失败：降级直写 MySQL，保证关注关系即时生效。             |
+| 热度增量 | `video.popularity.events` / `video.popularity.update` | 热度更新      | `{event_id, video_id, change, occurred_at}`                         | `PopularityWorker` | `UpdatePopularity` 发布失败：直接更新 Redis 热榜；并触发详情缓存失效（如需要）。 |
+| 时间线   | `video.timeline.events` / `video.timeline.publish`    | 视频发布      | `{event_id, video_id, create_time, occurred_at}`                    | Timeline Consumer（API 进程内） | Outbox 轮询器投递；消费后写入 `feed:global_timeline` ZSET。 |
+| 粉丝推送 | `video.timeline.events` / `video.timeline.fanout`     | 粉丝 Fanout   | `{event_id, video_id, author_id, create_time, occurred_at}`         | `FanoutWorker`     | 普通用户推送到活跃粉丝 inbox；大V（≥10000 粉丝）不推送，走拉路径。 |
 
 # 整体架构
 
@@ -171,15 +180,17 @@
 | 维度       | 亮点名称                    | 技术实现与设计细节                                           | 业务价值与优势                                               |
 | ---------- | --------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | 缓存架构   | 鉴权缓存自愈机制            | 鉴权中间件优先查 Redis（`account:<accountID>`）；若失效/不可用则回退 MySQL 校验 `account.token`；通过后自动回填 Redis（自愈）。 | 兼顾高性能与鲁棒性：Redis 宕机不影响鉴权；恢复后可自动“热启动”缓存，降低 DB 压力。 |
-| 缓存架构   | 分布式锁防击穿              | Feed 匿名流/视频详情等缓存未命中时，用 Redis `SETNX` 做互斥锁控制，仅允许一个请求回源构建缓存，其余等待/返回兜底结果。 | 避免热点 Key 过期瞬间大量并发回源，保护 MySQL，提升高峰期稳定性。 |
+| 缓存架构   | singleflight 防击穿         | Feed 匿名流/视频详情等缓存未命中时，用 Go 原生 `singleflight.Group` 合并同 key 并发请求，仅允许一个请求回源构建缓存，其余等待并共享结果。 | 避免热点 Key 过期瞬间大量并发回源，保护 MySQL，提升高峰期稳定性。 |
 | 缓存架构   | 滑动窗口热榜快照            | 互动/热度按分钟写入 ZSET；查询时用 `ZUNIONSTORE` 聚合最近 N 个时间窗（如 60 分钟）生成“短期快照”并分页读取。 | 降低高频写 Key 竞争；利用快照保证分页一致性，减少“榜单抖动”。 |
 | 缓存架构   | 主动失效一致性              | 视频删除/改名/点赞/评论导致数据变化时，主动 `DEL` 相关详情缓存、Feed 缓存或热榜相关缓存。 | 提升数据一致性与用户体验：避免看到已删除/过期/状态错误的旧数据。 |
 | 分页设计   | 双字段复合游标分页          | `/feed/listLikesCount` 使用 `likes_count_before + id_before` 作为复合游标（两者一起定位下一页）。 | 解决“点赞数相同”排序不稳定问题，确保不重复、不漏数据，分页稳定可复现。 |
 | 分页设计   | 快照式稳定分页              | `/feed/listByPopularity` 首次请求生成 `as_of`（分钟级快照版本），后续分页携带相同 `as_of + offset`。 | 规避热度实时变化导致的“跳页/重复/缺失”，滚动浏览更稳定。     |
 | 安全鉴权   | 软硬鉴权兼容模式            | 提供 `JWTAuth`（强制拦截）与 `SoftJWTAuth`（可不带 token；带了必须合法，否则 401）。 | 既支持匿名浏览 Feed，又支持登录态个性化（如点赞/关注状态），体验与安全兼顾。 |
 | 系统稳定性 | 多级存储降级设计            | Redis 为可选依赖：连接失败自动降级走 MySQL；Redis 恢复后通过请求自愈回填缓存。 | 提升环境适应性与容灾能力，基础设施异常时核心业务仍可用。     |
-| 异步架构   | RabbitMQ 事件驱动解耦       | 使用 RabbitMQ topic exchanges：`like.events`、`comment.events`、`social.events`、`video.popularity.events`；后端接口仅负责发布事件，`cmd/worker` 内的 Like/Comment/Social/Popularity Worker 异步消费并更新 MySQL/Redis。 | 削峰填谷、降低接口响应时延；写扩散与热度计算解耦，提升吞吐与可维护性，便于后续扩展更多消费者（统计、风控等）。 |
-| 异步架构   | MQ 异常降级直写             | 点赞/评论：尝试同时发布“写 MySQL 的队列”+“写 Redis 热度队列”；任一发布失败则对失败目标降级为直写（MySQL 或 Redis）。`UpdatePopularity` 发布失败则直接更新 Redis。 | MQ 不可用时仍能保证核心数据正确落库/可见，避免“请求成功但数据不落地”的一致性风险。 |
+| 异步架构   | RabbitMQ 事件驱动解耦       | 使用 RabbitMQ topic exchanges：`like.events`、`comment.events`、`social.events`、`video.popularity.events`、`video.timeline.events`；后端接口仅负责发布事件，`cmd/worker` 内的 Like/Comment/Social/Popularity/Fanout Worker 异步消费并更新 MySQL/Redis。 | 削峰填谷、降低接口响应时延；写扩散与热度计算解耦，提升吞吐与可维护性，便于后续扩展更多消费者（统计、风控等）。 |
+| 异步架构   | MQ 异常降级直写             | 点赞/评论：尝试同时发布”写 MySQL 的队列”+”写 Redis 热度队列”；任一发布失败则对失败目标降级为直写（MySQL 或 Redis）。`UpdatePopularity` 发布失败则直接更新 Redis。 | MQ 不可用时仍能保证核心数据正确落库/可见，避免”请求成功但数据不落地”的一致性风险。 |
+| 异步架构   | Outbox 模式保证最终一致性   | 视频发布时在一个事务里同时写 `Video` 表和 `OutboxMsg` 表，由 `OutboxWorker` 轮询器（间隔 1s，批量 100 条）异步投递到 TimelineMQ + FanoutMQ，两者都成功后删除 outbox 记录。 | 保证”DB 写入”和”MQ 投递”的最终一致性，避免分布式事务；失败自动重试，不丢消息。 |
+| 异步架构   | 推拉结合 Feed               | 普通用户发视频 → FanoutWorker 推送到活跃粉丝 `inbox:{followerID}` ZSET；大V（粉丝 ≥ 10000）不推送，只写 `user_videos:{authorID}` ZSET，读取时 k-way merge 归并。粉丝活跃度过滤：只推给 3 天内登录过的粉丝，僵尸粉走拉路径兜底。 | 兼顾写扩散成本与读延迟：普通用户推送保证实时性，大V拉取避免百万级 fanout 风暴；活跃度过滤减少无效推送。 |
 | 工程交付   | Docker Compose 一键依赖拉起 | 通过 `docker compose up -d rabbitmq`（或 `./start.sh` 自动拉起）快速启动 RabbitMQ 等依赖；本地环境以容器化方式对齐。 | 降低环境搭建成本，减少“在我机器上没问题”；便于 CI/本地联调/演示，提升交付效率。 |
 | 工程交付   | 脚本化一键启动与可拆分运行  | `./start.sh` 默认启动后端+前端，并可用 `START_FRONTEND=0` 仅启后端；Worker 可单独运行 `go run ./cmd/worker`。 | 提升开发体验与部署灵活性：既能一键体验全链路，也能按需拆分进程满足生产部署（API/Worker 独立伸缩）。 |
 | 工程质量   | 自动化基础设施              | 服务启动时执行 GORM `AutoMigrate` 自动同步 `Account/Video/Like/Comment/Social` 等表结构。 | 简化部署与迭代成本，“开箱即用”，保证 Schema 与模型一致性。   |

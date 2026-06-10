@@ -61,7 +61,7 @@ func main() {
 		cache = nil
 	} else {
 		// Verify Redis connection.
-		Pingctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		Pingctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		if err := cache.Ping(Pingctx); err != nil {

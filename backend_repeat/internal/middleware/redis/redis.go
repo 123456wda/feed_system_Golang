@@ -14,18 +14,31 @@ import (
 )
 
 type Client struct {
-	rdb *redis.Client
+	rdb     *redis.Client
+	breaker *Breaker
 }
 
 // 创建Redis客户端连接服务器
 func NewFromEnv(cfg *config.RedisConfig) (*Client, error) {
 	client := redis.NewClient(&redis.Options{
-		Addr:     cfg.Host + ":" + strconv.Itoa(cfg.Port),
-		Password: cfg.Password,
-		DB:       cfg.DB,
+		Addr:        cfg.Host + ":" + strconv.Itoa(cfg.Port),
+		Password:    cfg.Password,
+		DB:          cfg.DB,
+		DialTimeout: 5 * time.Second,
 	})
 
-	return &Client{rdb: client}, nil
+	return &Client{
+		rdb:     client,
+		breaker: NewBreaker(DefaultBreakerConfig()),
+	}, nil
+}
+
+// NewFromAddr 直接基于地址构造客户端，主要用于测试（如 miniredis）。
+func NewFromAddr(addr string) *Client {
+	return &Client{
+		rdb:     redis.NewClient(&redis.Options{Addr: addr}),
+		breaker: NewBreaker(DefaultBreakerConfig()),
+	}
 }
 
 // 关闭redis连接

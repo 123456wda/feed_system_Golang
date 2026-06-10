@@ -23,16 +23,11 @@ func isDuplicateKey(err error) bool {
 	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
 }
 
-// LikeIgnoreDuplicate 插入点赞记录，若已存在则静默忽略（不报错）。
-// 返回 created=true 表示实际插入了新记录，created=false 表示已存在（幂等）。
-// 供消费者使用,在多次发送同一点赞消息的时候,前面的消息处理完后,后面的消息查到已存在后静默忽略
-//
-//	幂等指的是：同一个操作执行一次和执行多次，产生的最终结果相同，且不会带来额外的副作用。比如一个点赞操作同时执行多次,实际最终只被点赞一次
-func (r *LikeRepository) LikeIgnoreDuplicate(ctx context.Context, like *Like) (created bool, err error) {
+func (r *LikeRepository) LikeIgnoreDuplicateInTx(ctx context.Context, tx *gorm.DB, like *Like) (created bool, err error) {
 	if like == nil || like.VideoID == 0 || like.AccountID == 0 {
 		return false, nil
 	}
-	err = r.db.WithContext(ctx).Create(like).Error
+	err = tx.WithContext(ctx).Create(like).Error
 	if err == nil {
 		return true, nil
 	}
@@ -129,6 +124,7 @@ func (r *LikeRepository) LikeInTx(ctx context.Context, tx *gorm.DB, like *Like) 
 
 // DeleteByVideoAndAccountInTx 在已有事务中删除点赞记录，
 // 若没有删到任何行则返回"用户未点赞"错误。
+// 用于 service fallback 路径的事务内操作。
 func (r *LikeRepository) DeleteByVideoAndAccountInTx(ctx context.Context, tx *gorm.DB, videoID, accountID uint) error {
 	res := tx.WithContext(ctx).
 		Where("video_id = ? AND account_id = ?", videoID, accountID).
@@ -140,4 +136,20 @@ func (r *LikeRepository) DeleteByVideoAndAccountInTx(ctx context.Context, tx *go
 		return errors.New("user has not liked this video")
 	}
 	return nil
+}
+
+// DeleteByVideoAndAccountTx 在已有事务中删除点赞记录，
+// 返回 deleted=true 表示实际删除了记录，deleted=false 表示记录本就不存在（幂等）。
+// 供 Worker 消费者在事务内使用，配合 created 判断是否需要更新计数。
+func (r *LikeRepository) DeleteByVideoAndAccountTx(ctx context.Context, tx *gorm.DB, videoID, accountID uint) (deleted bool, err error) {
+	if videoID == 0 || accountID == 0 {
+		return false, nil
+	}
+	res := tx.WithContext(ctx).
+		Where("video_id = ? AND account_id = ?", videoID, accountID).
+		Delete(&Like{})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }

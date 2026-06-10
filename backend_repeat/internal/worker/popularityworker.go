@@ -72,6 +72,7 @@ func (w *PopularityWorker) handleDelivery(ctx context.Context, d amqp.Delivery) 
 	}
 	// 确认消费成功，消息从队列中移除
 	_ = d.Ack(false)
+	rabbitmq.IncrConsumed(w.queue)
 }
 
 // process 解析 PopularityEvent JSON 并写入 Redis。

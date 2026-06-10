@@ -16,7 +16,7 @@ type TimelineMQ struct {
 const (
 	timelineExchange   = "video.timeline.events"
 	timelineQueue      = "video.timeline.update.queue"
-	timelineBindingKey = "video.timeline.*"
+	timelineBindingKey = "video.timeline.publish" // 精确匹配 publish 事件，避免收到 fanout 事件
 	timelinePublishRK  = "video.timeline.publish"
 )
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"feedsystem_video_go/internal/config"
+	"feedsystem_video_go/internal/observability"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -115,12 +116,17 @@ func (r *RabbitMQ) PublishJSON(ctx context.Context, exchange string, routineKey 
 	}
 
 	// 发送消息
-	return r.Ch.PublishWithContext(ctx, exchange, routineKey, false, false, amqp.Publishing{
+	err = r.Ch.PublishWithContext(ctx, exchange, routineKey, false, false, amqp.Publishing{
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
 		Body:         body,
 		Timestamp:    time.Now(),
 	})
+	if err != nil {
+		return err
+	}
+	observability.MQMessagesPublished.WithLabelValues(exchange, routineKey).Inc()
+	return nil
 }
 
 func newEventID(n int) (string, error) {
@@ -130,4 +136,9 @@ func newEventID(n int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// IncrConsumed 递增消费计数，供 Worker 调用
+func IncrConsumed(queue string) {
+	observability.MQMessagesConsumed.WithLabelValues(queue).Inc()
 }

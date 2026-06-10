@@ -40,7 +40,7 @@ async function loadHot(reset: boolean) {
     state.hasMore = res.has_more
     state.asOf = res.as_of
     state.nextOffset = res.next_offset
-    state.items = reset ? res.video_list : state.items.concat(res.video_list)
+    state.items = reset ? (res.video_list ?? []) : state.items.concat(res.video_list ?? [])
   } catch (e) {
     state.error = e instanceof ApiError ? e.message : String(e)
   } finally {

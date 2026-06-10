@@ -32,6 +32,17 @@ func (r *CommentRepository) GetAllComments(ctx context.Context, videoID uint) ([
 	return comments, err
 }
 
+// GetCommentsByPage 分页查询某视频下的评论，按创建时间倒序（最新的在前）。
+func (r *CommentRepository) GetCommentsByPage(ctx context.Context, videoID uint, offset, limit int) ([]Comment, error) {
+	var comments []Comment
+	err := r.db.WithContext(ctx).
+		Where("video_id = ?", videoID).
+		Order("created_at desc").
+		Offset(offset).Limit(limit).
+		Find(&comments).Error
+	return comments, err
+}
+
 // GetByID 根据主键查询单条评论，不存在返回 (nil, nil)。
 func (r *CommentRepository) GetByID(ctx context.Context, id uint) (*Comment, error) {
 	var comment Comment

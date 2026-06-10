@@ -85,7 +85,7 @@ func (h *CommentHandler) GetAllComments(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "video_id is required"})
 		return
 	}
-	comments, err := h.CommentService.GetAll(c.Request.Context(), req.VideoID)
+	comments, err := h.CommentService.GetAll(c.Request.Context(), req.VideoID, req.Page, req.PageSize)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

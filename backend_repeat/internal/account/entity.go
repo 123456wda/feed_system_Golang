@@ -1,10 +1,11 @@
 package account
 
 type Account struct {
-	ID       uint   `gorm:"primaryKey" json:"id"`
-	Username string `gorm:"unique" json:"username"`
-	Password string `json:"-"`
-	Token    string `json:"-"`
+	ID            uint   `gorm:"primaryKey" json:"id"`
+	Username      string `gorm:"unique" json:"username"`
+	Password      string `json:"-"`
+	Token         string `json:"-"`
+	FollowerCount int64  `gorm:"column:follower_count;not null;default:0" json:"follower_count"` // 粉丝数，用于判断大V
 }
 
 // 捕获注册请求的参数

@@ -12,7 +12,9 @@ type Comment struct {
 }
 
 type GetAllCommentsRequest struct {
-	VideoID uint `json:"video_id" binding:"required"`
+	VideoID  uint `json:"video_id" binding:"required"`
+	Page     int  `json:"page"`      // 页码，从 1 开始，默认 1
+	PageSize int  `json:"page_size"` // 每页条数，默认 20，最大 100
 }
 
 type PublishCommentRequest struct {

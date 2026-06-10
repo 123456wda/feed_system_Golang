@@ -12,7 +12,6 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
 )
 
 var ErrUsernameTaken = errors.New("username already exists")
@@ -41,12 +40,7 @@ func (s *AccountService) CreateAccount(ctx context.Context, account *Account) er
 }
 
 func (s *AccountService) FindByUsername(ctx context.Context, username string) (*Account, error) {
-	var account *Account
-	var err error
-	if account, err = s.accountRepository.FindByUsername(ctx, username); err != nil {
-		return nil, err
-	}
-	return account, nil
+	return s.accountRepository.FindByUsername(ctx, username)
 }
 
 func (s *AccountService) Login(ctx context.Context, req *LoginRequest) (string, error) {
@@ -71,13 +65,18 @@ func (s *AccountService) Login(ctx context.Context, req *LoginRequest) (string, 
 	}
 	// redis存储Token
 	if s.cache != nil {
-		// 缓存操作上下文
-		cancelctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		// 缓存操作上下文，继承请求的 ctx 以支持取消传播
+		cancelctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 		defer cancel()
 		// 设置redistoken缓存
 		if err := s.cache.SetBytes(cancelctx, fmt.Sprintf("account:%d", account.ID),
 			[]byte(tokenstring), 24*time.Hour); err != nil {
 			log.Printf("failed to set cache(login token): %v", err)
+		}
+		// 记录用户活跃时间，用于推拉结合的粉丝活跃度过滤
+		if err := s.cache.SetBytes(cancelctx, fmt.Sprintf("user:active:%d", account.ID),
+			[]byte("1"), 72*time.Hour); err != nil {
+			log.Printf("failed to set cache(user active): %v", err)
 		}
 	}
 
@@ -112,11 +111,7 @@ func (s *AccountService) ChangePassword(ctx context.Context, req *ChangePassword
 }
 
 func (s *AccountService) FindByID(ctx context.Context, id uint) (*Account, error) {
-	if account, err := s.accountRepository.FindByID(ctx, id); err != nil {
-		return nil, err
-	} else {
-		return account, nil
-	}
+	return s.accountRepository.FindByID(ctx, id)
 }
 
 func (s *AccountService) Logout(ctx context.Context, id uint) error {
@@ -152,14 +147,11 @@ func (s *AccountService) Rename(ctx context.Context, accountID uint, newUsername
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
 			return "", ErrUsernameTaken
 		}
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", err
-		}
 		return "", err
 	}
-	// 回源Redis
+	// 回源Redis，继承请求的 ctx 以支持取消传播
 	if s.cache != nil {
-		cacheCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+		cacheCtx, cancel := context.WithTimeout(ctx, time.Millisecond*50)
 		defer cancel()
 		if err := s.cache.SetBytes(cacheCtx, fmt.Sprintf("account:%d", accountID), []byte(tokenString), time.Hour*24); err != nil {
 			log.Printf("warning redis cache(newUsername token): %v", err)

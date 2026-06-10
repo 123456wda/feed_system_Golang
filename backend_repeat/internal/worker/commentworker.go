@@ -69,6 +69,7 @@ func (w *CommentWorker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 	}
 	// 确认消息已被正确处理
 	_ = d.Ack(false)
+	rabbitmq.IncrConsumed(w.queue)
 }
 
 // process 解析 CommentEvent JSON，根据 Action 字段分发到 applyPublish 或 applyDelete。

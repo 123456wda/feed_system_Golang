@@ -114,3 +114,29 @@ func (r *SocialRepository) IsFollowed(ctx context.Context, social *Social) (bool
 	}
 	return count > 0, nil
 }
+
+// GetAllFollowerIDs 查询某博主的所有粉丝 ID 列表（不查 account 表）。
+// 用于 fanout worker 批量推送收件箱，只需 ID 不需要完整账号信息，性能更好。
+func (r *SocialRepository) GetAllFollowerIDs(ctx context.Context, vloggerID uint) ([]uint, error) {
+	var ids []uint
+	if err := r.db.WithContext(ctx).
+		Model(&Social{}).
+		Where("vlogger_id = ?", vloggerID).
+		Pluck("follower_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// CountFollowers 查询某博主的粉丝数量。
+// 用于 fanout worker 判断是否大V（粉丝数 >= 阈值）。
+func (r *SocialRepository) CountFollowers(ctx context.Context, vloggerID uint) (int64, error) {
+	var count int64
+	if err := r.db.WithContext(ctx).
+		Model(&Social{}).
+		Where("vlogger_id = ?", vloggerID).
+		Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}

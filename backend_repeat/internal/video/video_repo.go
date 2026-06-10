@@ -38,6 +38,7 @@ func (r *VideoRepository) PublishVideo(ctx context.Context, video *Video) error 
 		}
 		msg := OutboxMsg{
 			VideoID:    video.ID,
+			AuthorID:   video.AuthorID, // 记录作者 ID，供 fanout worker 判断是否大V
 			EventType:  "video_published",
 			Status:     "pending",
 			CreateTime: video.CreateTime,

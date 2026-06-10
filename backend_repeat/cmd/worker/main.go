@@ -16,6 +16,7 @@
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -53,6 +54,11 @@ const (
 	popularityQueue      = "video.popularity.events"
 	popularityBindingKey = "video.popularity.*"
 
+	// Fanout MQ topology（复用 timeline exchange，独立队列和 routing key）。
+	fanoutExchange   = "video.timeline.events"
+	fanoutQueue      = "video.timeline.fanout.queue"
+	fanoutBindingKey = "video.timeline.fanout"
+
 	prefetchCount  = 50
 	prefetchSize   = 0
 	prefetchGlobal = false
@@ -61,6 +67,9 @@ const (
 func main() {
 	// Read config.
 	configPath := os.Getenv("CONFIG_PATH")
+	configPath_docker := flag.String("config", "", "配置文件路径")
+	flag.Parse()
+	configPath = *configPath_docker
 	if configPath == "" {
 		configPath = "configs/config.yaml"
 	}
@@ -87,7 +96,7 @@ func main() {
 		log.Printf("Redis config error (popularity worker disabled): %v", err)
 		cache = nil
 	} else {
-		pingCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := cache.Ping(pingCtx); err != nil {
 			log.Printf("Redis not available (popularity worker disabled): %v", err)
@@ -127,9 +136,16 @@ func main() {
 		log.Fatalf("Failed to set Qos: %v", err)
 	}
 
+	// Declare fanout topology（推拉结合的推路径 MQ）。
+	if cache != nil {
+		if err := declareFanoutTopology(rbq); err != nil {
+			log.Fatalf("Failed to declare fanout topology: %v", err)
+		}
+	}
+
 	// Create repositories and workers.
 	socialRepo := social.NewSocialRepository(sqlDB)
-	socialWorker := worker.NewSocialWorker(rbq, socialRepo, socialQueue)
+	socialWorker := worker.NewSocialWorker(rbq, socialRepo, cache, socialQueue)
 
 	videoRepo := video.NewVideoRepository(sqlDB)
 
@@ -144,6 +160,12 @@ func main() {
 		popularityWorker = worker.NewPopularityWorker(rbq, cache, popularityQueue)
 	}
 
+	// FanoutWorker：消费 FanoutMQ，根据作者粉丝数决定推/拉策略
+	var fanoutWorker *worker.FanoutWorker
+	if cache != nil {
+		fanoutWorker = worker.NewFanoutWorker(rbq, socialRepo, cache, fanoutQueue)
+	}
+
 	// 创建一个上下文管理消费者
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop() // 自动关闭上下文
@@ -156,7 +178,7 @@ func main() {
 	defer pprofServer.Close()
 
 	// 开始启动消费者协程
-	errCh := make(chan error, 4) // 创建一个管道接收4个协程的错误信息
+	errCh := make(chan error, 5) // 创建一个管道接收协程的错误信息
 	log.Printf("Worker started consuming queue = %s", socialQueue)
 	go func() {
 		errCh <- socialWorker.Run(ctx)
@@ -173,6 +195,12 @@ func main() {
 		log.Printf("Worker started consuming queue = %s", popularityQueue)
 		go func() {
 			errCh <- popularityWorker.Run(ctx)
+		}()
+	}
+	if fanoutWorker != nil {
+		log.Printf("Worker started consuming queue = %s (push-pull hybrid)", fanoutQueue)
+		go func() {
+			errCh <- fanoutWorker.Run(ctx)
 		}()
 	}
 
@@ -197,4 +225,8 @@ func declareCommentTopology(rbq *rabbitmq.RabbitMQ) error {
 
 func declarePopularityTopology(rbq *rabbitmq.RabbitMQ) error {
 	return rbq.DeclareTopic(popularityExchange, popularityQueue, popularityBindingKey)
+}
+
+func declareFanoutTopology(rbq *rabbitmq.RabbitMQ) error {
+	return rbq.DeclareTopic(fanoutExchange, fanoutQueue, fanoutBindingKey)
 }

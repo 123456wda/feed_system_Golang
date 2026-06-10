@@ -4,26 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"strconv"
+	"time"
 
 	rabbitmq "feedsystem_video_go/internal/middleware/rabbitmq"
+	rediscache "feedsystem_video_go/internal/middleware/redis"
 	"feedsystem_video_go/internal/social"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/redis/go-redis/v9"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // SocialWorker 消费 socialMQ 的消息，负责将关注/取关事件同步写入 MySQL。
-// API 的 MQ 投递是"尽力而为"的通知，真正的持久化由本 worker 完成。
-// 这样 API 可以快速返回，下游 timeline fanout 等操作被异步化。
+// 同时维护推拉结合所需的 Redis 数据结构：
+//   - 关注大V时，将 vloggerID 加入 following:bigv:{followerID} SET
+//   - 关注普通用户时，回填被关注者最近视频到 inbox:{followerID} ZSET
+//   - 取关时，从 following:bigv:{followerID} SET 移除
 type SocialWorker struct {
 	rbq   *rabbitmq.RabbitMQ
 	repo  *social.SocialRepository
+	cache *rediscache.Client // 用于维护推拉结合的 Redis 数据结构
 	queue string
 }
 
-func NewSocialWorker(rbq *rabbitmq.RabbitMQ, repo *social.SocialRepository, queue string) *SocialWorker {
-	return &SocialWorker{rbq: rbq, repo: repo, queue: queue}
+func NewSocialWorker(rbq *rabbitmq.RabbitMQ, repo *social.SocialRepository, cache *rediscache.Client, queue string) *SocialWorker {
+	return &SocialWorker{rbq: rbq, repo: repo, cache: cache, queue: queue}
 }
 
 // Run 启动消费者循环，阻塞直到 ctx 被取消。
@@ -32,7 +40,6 @@ func (w *SocialWorker) Run(ctx context.Context) error {
 		return errors.New("social worker is not initialized")
 	}
 
-	// 从已声明的队列中消费消息，autoAck=false 由业务层手动控制
 	deliveries, err := w.rbq.Ch.Consume(
 		w.queue,
 		"",    // consumer: 空字符串由 RabbitMQ 自动生成
@@ -46,7 +53,6 @@ func (w *SocialWorker) Run(ctx context.Context) error {
 		return err
 	}
 
-	// 轮询消费，直到 ctx 被取消或 channel 关闭
 	for {
 		select {
 		case <-ctx.Done():
@@ -61,27 +67,22 @@ func (w *SocialWorker) Run(ctx context.Context) error {
 }
 
 // handleDelivery 处理单条 RabbitMQ 投递。
-// 成功 → Ack 确认消费（从队列移除）；失败 → Nack 重新入队等待重试。
 func (w *SocialWorker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 	if err := w.process(ctx, d.Body); err != nil {
 		log.Printf("social worker: failed to process message: %v", err)
-		// Nack + requeue=true：消息重新入队，下次再试
 		_ = d.Nack(false, true)
 		return
 	}
-	// 处理成功，确认消费
 	_ = d.Ack(false)
+	rabbitmq.IncrConsumed(w.queue)
 }
 
 // process 解析 SocialEvent JSON，根据 Action 字段分发到对应处理逻辑。
-// 解析失败的消息直接丢弃（脏数据重试无意义，会一直失败）。
 func (w *SocialWorker) process(ctx context.Context, body []byte) error {
 	var evt rabbitmq.SocialEvent
 	if err := json.Unmarshal(body, &evt); err != nil {
-		// JSON 解析失败 → 脏数据，丢弃不重试（return nil 让 handleDelivery Ack 掉）
 		return nil
 	}
-	// 字段校验：关注者和被关注者都不能为 0
 	if evt.FollowerID == 0 || evt.VloggerID == 0 {
 		return nil
 	}
@@ -93,25 +94,121 @@ func (w *SocialWorker) process(ctx context.Context, body []byte) error {
 			FollowerID: evt.FollowerID,
 			VloggerID:  evt.VloggerID,
 		})
-		if err == nil {
-			return nil
+		if err != nil {
+			var mysqlErr *mysql.MySQLError
+			if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+				// 幂等忽略重复投递
+			} else {
+				return err
+			}
 		}
-		// 处理 MySQL 1062 唯一键冲突（重复投递场景）：
-		// MQ 的 at-least-once 语义可能导致同一条消息被多次投递，
-		// 第一次插入成功后，后续重复消息会触发 1062，这里幂等忽略。
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-			return nil
-		}
-		return err
+		// 关注成功后，维护推拉结合的 Redis 数据结构
+		w.onFollow(ctx, evt.FollowerID, evt.VloggerID)
+		return nil
 	case "unfollow":
-		// 删除关注记录（Unfollow 本身是幂等的，删 0 行也不报错）
-		return w.repo.Unfollow(ctx, &social.Social{
+		err := w.repo.Unfollow(ctx, &social.Social{
 			FollowerID: evt.FollowerID,
 			VloggerID:  evt.VloggerID,
 		})
+		// 取关后清理 bigv SET
+		w.onUnfollow(ctx, evt.FollowerID, evt.VloggerID)
+		return err
 	default:
-		// 未知事件类型，丢弃
 		return nil
+	}
+}
+
+// onFollow 关注成功后的 Redis 维护逻辑。
+func (w *SocialWorker) onFollow(ctx context.Context, followerID, vloggerID uint) {
+	if w.cache == nil {
+		return
+	}
+	opCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// 查询被关注者粉丝数，判断是否大V
+	isBigV, _ := w.isBigV(opCtx, vloggerID)
+
+	bigvKey := fmt.Sprintf("following:bigv:%d", followerID)
+	if isBigV {
+		// 关注的是大V，加入 bigv SET
+		_ = w.cache.SAdd(opCtx, bigvKey, fmt.Sprintf("%d", vloggerID))
+		_ = w.cache.Expire(opCtx, bigvKey, 24*time.Hour)
+	} else {
+		// 关注的是普通用户，回填被关注者最近视频到 inbox
+		w.backfillInbox(opCtx, followerID, vloggerID)
+	}
+}
+
+// onUnfollow 取关后的 Redis 维护逻辑。
+func (w *SocialWorker) onUnfollow(_ context.Context, followerID, vloggerID uint) {
+	if w.cache == nil {
+		return
+	}
+	opCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	// 从 bigv SET 移除（无论是否大V，SRem 幂等）
+	bigvKey := fmt.Sprintf("following:bigv:%d", followerID)
+	_ = w.cache.SRem(opCtx, bigvKey, fmt.Sprintf("%d", vloggerID))
+}
+
+// isBigV 判断用户是否大V（粉丝数 >= BigVThreshold）。
+func (w *SocialWorker) isBigV(ctx context.Context, userID uint) (bool, error) {
+	cacheKey := fmt.Sprintf("user:follower_count:%d", userID)
+
+	// 尝试从 Redis 读取粉丝数
+	val, err := w.cache.GetBytes(ctx, cacheKey)
+	if err == nil {
+		count, parseErr := strconv.ParseInt(string(val), 10, 64)
+		if parseErr == nil {
+			return count >= BigVThreshold, nil
+		}
+	}
+
+	// 缓存未命中，查 MySQL
+	count, err := w.repo.CountFollowers(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	// 回写 Redis 缓存
+	_ = w.cache.SetBytes(ctx, cacheKey, []byte(fmt.Sprintf("%d", count)), 0)
+	return count >= BigVThreshold, nil
+}
+
+// backfillInbox 回填被关注者最近视频到关注者的收件箱。
+// 从 user_videos:{vloggerID} ZSET 取最近 50 条，写入 inbox:{followerID} ZSET。
+func (w *SocialWorker) backfillInbox(ctx context.Context, followerID, vloggerID uint) {
+	outboxKey := fmt.Sprintf("user_videos:%d", vloggerID)
+	inboxKey := fmt.Sprintf("inbox:%d", followerID)
+
+	// 从被关注者的 outbox 取最近 50 条视频
+	videos, err := w.cache.ZRevRangeWithScores(ctx, outboxKey, 0, 49)
+	if err != nil || len(videos) == 0 {
+		return
+	}
+
+	// 批量写入关注者的 inbox
+	rdb := w.cache.GetRedisClient()
+	if rdb != nil && !w.cache.IsBreakerOpen() {
+		pipe := rdb.Pipeline()
+		for _, v := range videos {
+			pipe.ZAdd(ctx, inboxKey, redis.Z{
+				Member: v.Member,
+				Score:  v.Score,
+			})
+		}
+		// 裁剪到 inboxCap
+		pipe.ZRemRangeByRank(ctx, inboxKey, 0, -(inboxCap + 1))
+		_, _ = pipe.Exec(ctx)
+	} else {
+		// Pipeline 不可用，逐个写入
+		for _, v := range videos {
+			_ = w.cache.ZAdd(ctx, inboxKey, redis.Z{
+				Member: v.Member,
+				Score:  v.Score,
+			})
+		}
+		_ = w.cache.ZRemRangeByRank(ctx, inboxKey, 0, -(inboxCap + 1))
 	}
 }

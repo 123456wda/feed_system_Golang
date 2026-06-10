@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"time"
 
 	"feedsystem_video_go/internal/account"
 	"feedsystem_video_go/internal/config"
@@ -20,6 +21,16 @@ func NewDB(dbcfg config.DatabaseConfig) (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 连接池调优
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	sqlDB.SetMaxOpenConns(100)               // 最大打开连接数
+	sqlDB.SetMaxIdleConns(25)                // 最大空闲连接数
+	sqlDB.SetConnMaxLifetime(5 * time.Minute) // 连接最大存活时间
+	sqlDB.SetConnMaxIdleTime(3 * time.Minute) // 空闲连接最大存活时间
 
 	return db, nil
 }

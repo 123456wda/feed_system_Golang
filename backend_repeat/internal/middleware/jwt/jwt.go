@@ -48,7 +48,7 @@ func check(c *gin.Context, claims *auth.Claims, tokenString string, accountRepo 
 	key := fmt.Sprintf("account:%d", claims.AccountID)
 
 	if cache != nil {
-		cacheCtx, cancel := context.WithTimeout(context.Background(), time.Microsecond*50)
+		cacheCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 		defer cancel()
 		trueToken, err := cache.GetBytes(cacheCtx, key)
 		if err != nil {
@@ -98,13 +98,15 @@ func SoftJWTAuth(accountRepo *account.AccountRepository, cache *rediscache.Clien
 		}
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization header"})
+			// 格式不对，当匿名用户处理
+			c.Next()
 			return
 		}
 		tokenString := parts[1]
 		claims, err := auth.ParseToken(tokenString)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
+			// token 无效或过期，当匿名用户处理（不阻塞公开接口）
+			c.Next()
 			return
 		}
 		check(c, claims, tokenString, accountRepo, cache)

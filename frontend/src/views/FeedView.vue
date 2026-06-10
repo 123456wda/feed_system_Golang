@@ -79,7 +79,7 @@ async function loadLatest(reset: boolean) {
     const res = await feedApi.listLatest({ limit: latest.limit, latest_time })
     latest.has_more = res.has_more
     latest.next_time = res.next_time
-    latest.items = reset ? res.video_list : latest.items.concat(res.video_list)
+    latest.items = reset ? (res.video_list ?? []) : latest.items.concat(res.video_list ?? [])
   } catch (e) {
     latest.error = e instanceof ApiError ? e.message : String(e)
   } finally {
@@ -99,7 +99,7 @@ async function loadLikesCount(reset: boolean) {
     likesCount.has_more = res.has_more
     likesCount.next_likes_count_before = res.next_likes_count_before
     likesCount.next_id_before = res.next_id_before
-    likesCount.items = reset ? res.video_list : likesCount.items.concat(res.video_list)
+    likesCount.items = reset ? (res.video_list ?? []) : likesCount.items.concat(res.video_list ?? [])
   } catch (e) {
     likesCount.error = e instanceof ApiError ? e.message : String(e)
   } finally {
@@ -115,7 +115,7 @@ async function loadFollowing(reset: boolean) {
     const res = await feedApi.listByFollowing({ limit: following.limit, latest_time })
     following.has_more = res.has_more
     following.next_time = res.next_time
-    following.items = reset ? res.video_list : following.items.concat(res.video_list)
+    following.items = reset ? (res.video_list ?? []) : following.items.concat(res.video_list ?? [])
   } catch (e) {
     following.error = e instanceof ApiError ? e.message : String(e)
   } finally {

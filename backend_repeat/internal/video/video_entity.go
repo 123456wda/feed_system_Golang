@@ -19,6 +19,7 @@ type Video struct {
 type OutboxMsg struct {
 	ID         uint      `gorm:"primaryKey"`
 	VideoID    uint      `gorm:"index"`
+	AuthorID   uint      `gorm:"index"` // 视频作者 ID，用于 fanout 判断是否大V
 	EventType  string    `gorm:"type:varchar(50)"`
 	CreateTime time.Time `gorm:"autoCreateTime"`
 	Status     string    `gorm:"type:varchar(50);index"`

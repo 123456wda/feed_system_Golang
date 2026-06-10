@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -16,33 +17,35 @@ import (
 )
 
 // StartOutboxPoller 启动 outbox 轮询器（一个 goroutine）。
-// 不断从 outbox 表中取 status='pending' 的记录，投递到 TimelineMQ，成功后删除。
+// 不断从 outbox 表中取 status='pending' 的记录，投递到 TimelineMQ 和 FanoutMQ，两者都成功后删除。
 // 保证"视频写入 DB"和"事件投递到 MQ"的最终一致性。
-func StartOutboxPoller(db *gorm.DB, tmq *rabbitmq.TimelineMQ) {
-	// TODO: 启动 goroutine，轮询 outbox 表
-	// 1. SELECT * FROM outbox_msgs WHERE status='pending' ORDER BY create_time ASC LIMIT 100
-	// 2. 逐条调用 tmq.PublishVideo()
-	// 3. 投递成功则 DELETE 该条记录
-	// 4. 失败则 log 记录，下次重试
-	// 5. 无记录时 sleep 1 秒
-
+// FanoutMQ 为 nil 时降级为只投递 TimelineMQ（兼容旧逻辑）。
+func StartOutboxPoller(db *gorm.DB, tmq *rabbitmq.TimelineMQ, fmq *rabbitmq.FanoutMQ) {
 	go func() {
 		for {
 			var msgs []video.OutboxMsg
-			err := db.Where("status = ?", "pending").Order("create_time ASC").Find(&msgs).Error
+			err := db.Where("status = ?", "pending").Order("create_time ASC").Limit(100).Find(&msgs).Error
 			if err != nil || len(msgs) == 0 {
 				time.Sleep(1 * time.Second)
 				continue
 			}
 			for _, msg := range msgs {
-				err := tmq.PublishVideo(context.Background(), msg.VideoID, msg.CreateTime)
-				if err != nil {
-					log.Printf("投递MQ失败: VideoID: %d, err: %v", msg.VideoID, err)
-				} else {
-					db.Delete(&msg)
+				ctx := context.Background()
+				// 投递到 TimelineMQ（写全局时间线）
+				if err := tmq.PublishVideo(ctx, msg.VideoID, msg.CreateTime); err != nil {
+					log.Printf("投递TimelineMQ失败: VideoID: %d, err: %v", msg.VideoID, err)
+					continue // 失败则跳过，下次重试
 				}
+				// 投递到 FanoutMQ（推送到粉丝收件箱）
+				if fmq != nil {
+					if err := fmq.PublishFanout(ctx, msg.VideoID, msg.AuthorID, msg.CreateTime); err != nil {
+						log.Printf("投递FanoutMQ失败: VideoID: %d, err: %v", msg.VideoID, err)
+						continue // 失败则跳过，下次重试
+					}
+				}
+				// 两者都成功，删除 outbox 记录
+				db.Delete(&msg)
 			}
-
 		}
 	}()
 }
@@ -82,6 +85,9 @@ func StartConsumer(tmq *rabbitmq.TimelineMQ, queueName string, redisClient *redi
 			})
 			if err != nil {
 				log.Printf("写入Zset失败")
+				if errors.Is(err, rediscache.ErrBreakerOpen) {
+					time.Sleep(time.Second)
+				}
 				msg.Nack(false, true)
 				cancel()
 				continue
@@ -91,6 +97,7 @@ func StartConsumer(tmq *rabbitmq.TimelineMQ, queueName string, redisClient *redi
 				log.Printf("ZRem失败")
 			}
 			msg.Ack(false)
+			rabbitmq.IncrConsumed(queueName)
 		}
 	}()
 }

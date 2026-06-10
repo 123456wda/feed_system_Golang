@@ -26,7 +26,7 @@ type VideoService struct {
 }
 
 func NewVideoService(repo *VideoRepository, cache *rediscache.Client, rmq *rabbitmq.PopularityMQ) *VideoService {
-	if repo == nil || cache == nil || rmq == nil {
+	if repo == nil {
 		panic("nil pointer")
 	}
 	return &VideoService{repo, rmq, cache, gocache.New(3*time.Second, 5*time.Second), 5 * time.Minute}

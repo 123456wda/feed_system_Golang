@@ -1,4 +1,5 @@
-# 服务跑在主机,中间件跑在docker里面
+# 中间件跑在 Docker (vid_redis)，后端服务跑在主机
+# 启动方式: docker compose -f docker-compose.local.yml up -d
 
 server:
   port: 8080
@@ -7,13 +8,13 @@ database:
   host: localhost
   port: 3307
   user: root
-  password: root
+  password: "123456"
   dbname: feedsystem
 
 redis:
   host: localhost
-  port: 6379
-  password: 123456
+  port: 6380
+  password: "123456"
   db: 0
 
 rabbitmq:

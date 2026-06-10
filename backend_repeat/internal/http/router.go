@@ -16,9 +16,12 @@ import (
 	"feedsystem_video_go/internal/middleware/rabbitmq"
 	"feedsystem_video_go/internal/middleware/ratelimit"
 	rediscache "feedsystem_video_go/internal/middleware/redis"
+	"feedsystem_video_go/internal/observability"
 	"feedsystem_video_go/internal/social"
 	"feedsystem_video_go/internal/video"
 	"feedsystem_video_go/internal/worker"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -33,6 +36,10 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 	// 把URL路径/static映射为对应路径,目的是方便加载本地视频资源
 	r.Static("/static", "./.run/uploads")
 
+	// 注册普罗米修斯用到的中间件
+	r.Use(observability.MetricsMiddleware())
+	// 注册一个路由给普罗米修斯拉取程序执行的数据
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	// 创建account相关限流器
 	loginLimiter := ratelimit.Limit(cache, "account_login", 10, time.Minute, ratelimit.KeyByIP)
 	registerLimiter := ratelimit.Limit(cache, "account_register", 10, time.Minute, ratelimit.KeyByIP)
@@ -94,8 +101,8 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 
 	// 处理like相关业务的路由
 
-	// 点赞写操作限流：每用户每分钟最多 30 次，防止恶意刷赞
-	likeLimiter := ratelimit.Limit(cache, "like_write", 30, time.Minute, ratelimit.KeyByAccount)
+	// 点赞写操作限流：每用户每分钟最多 30 次，滑动窗口避免边界突刺
+	likeLimiter := ratelimit.SlidingWindowLimitByAccount(cache, "like_write", 30, time.Minute)
 
 	// 初始化 LikeMQ 生产者，用于异步投递点赞/取消点赞事件
 	likeMQ, err := rabbitmq.NewLikeMQ(rbq)
@@ -123,8 +130,8 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 
 	// 处理comment相关业务的路由
 
-	// 组装一下限流器
-	commentLimiter := ratelimit.Limit(cache, "comment_write", 10, time.Minute, ratelimit.KeyByAccount)
+	// 评论写操作限流：每用户每分钟最多 10 次，滑动窗口避免边界突刺
+	commentLimiter := ratelimit.SlidingWindowLimitByAccount(cache, "comment_write", 10, time.Minute)
 
 	commentRepository := video.NewCommentRepository(db)
 	commentMQ, err := rabbitmq.NewCommentMQ(rbq)
@@ -146,8 +153,8 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 	}
 
 	// ========== social 模块 ==========
-	// 关注/取关是写操作，需要限流防止恶意刷关注
-	socialLimiter := ratelimit.Limit(cache, "social_write", 20, time.Minute, ratelimit.KeyByAccount)
+	// 关注/取关是写操作，需要限流防止恶意刷关注，滑动窗口避免边界突刺
+	socialLimiter := ratelimit.SlidingWindowLimitByAccount(cache, "social_write", 20, time.Minute)
 
 	// 初始化 SocialMQ 生产者，用于异步投递关注/取关事件。
 	// MQ 通知下游（如 timeline fanout），但关注关系本身由 API 同步写库保证。
@@ -196,14 +203,20 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rbq *rabbitmq.RabbitMQ) *g
 	}
 
 	// ========== worker 模块 ==========
-	// TimelineMQ：视频发布事件的消息通道
+	// TimelineMQ：视频发布事件的消息通道（写全局时间线）
 	timelineMQ, err := rabbitmq.NewTimelineMQ(rbq)
 	if err != nil {
 		log.Printf("timelineMQ init failed (mq disabled): %v", err)
 		timelineMQ = nil
 	}
-	// OutboxWorker：轮询 outbox 表，投递未发送的事件到 TimelineMQ
-	worker.StartOutboxPoller(db, timelineMQ)
+	// FanoutMQ：视频 fanout 事件的消息通道（推送到粉丝收件箱，推拉结合的推路径）
+	fanoutMQ, err := rabbitmq.NewFanoutMQ(rbq)
+	if err != nil {
+		log.Printf("fanoutMQ init failed (mq disabled): %v", err)
+		fanoutMQ = nil
+	}
+	// OutboxWorker：轮询 outbox 表，投递未发送的事件到 TimelineMQ 和 FanoutMQ
+	worker.StartOutboxPoller(db, timelineMQ, fanoutMQ)
 	// Consumer：消费 TimelineMQ，写入 Redis ZSET (feed:global_timeline)
 	worker.StartConsumer(timelineMQ, "video.timeline.update.queue", cache)
 

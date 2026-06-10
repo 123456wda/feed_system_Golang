@@ -2,7 +2,9 @@ package auth
 
 import (
 	"errors"
+	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -23,9 +25,16 @@ const (
 	defaultJWTSecret = "feedsystem_secret"
 )
 
+var warnOnce sync.Once
+
 func jwtSecret() []byte {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
+		warnOnce.Do(func() {
+			log.Printf("[WARNING] JWT_SECRET env var not set, using default secret. "+
+				"This is INSECURE and should only be used for local development. "+
+				"Set JWT_SECRET environment variable for production.")
+		})
 		secret = defaultJWTSecret
 	}
 
